@@ -25,19 +25,38 @@
 //! # }
 //! ```
 
+use crate::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::path::Path;
 use tokio::fs;
-use crate::Error;
 
 /// Represents an OpenAPI specification
 #[derive(Debug)]
 pub struct OpenAPISpec {
     /// The raw JSON value of the OpenAPI spec
     pub json: JsonValue,
+}
+
+/// Info about a single OpenAPI parameter
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ParameterInfo {
+    pub name: String,
+    pub rust_type: String,
+    pub description: Option<String>,
+    pub example: Option<JsonValue>,
+}
+
+/// Info about a single response property
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PropertyInfo {
+    pub name: String,
+    pub rust_type: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub example: Option<JsonValue>,
 }
 
 /// Parsed endpoint context for template rendering
@@ -51,10 +70,10 @@ pub struct EndpointContext {
     pub properties_type: String,
     pub response_type: String,
     pub envelope_properties: JsonValue,
-    pub properties: JsonValue,
+    pub properties: Vec<PropertyInfo>,
     pub properties_for_handler: Vec<String>,
-    pub parameters: JsonValue,
-    pub openapi_parameters: JsonValue,
+    pub parameters: Vec<ParameterInfo>,
+    pub openapi_parameters: Vec<ParameterInfo>,
     pub common_parameter_names: Vec<String>,
     pub endpoint_specific_parameters: Vec<String>,
     pub summary: String,
@@ -118,7 +137,10 @@ impl OpenAPISpec {
     pub async fn parse_endpoints(&self) -> crate::Result<Vec<EndpointContext>> {
         let mut contexts = Vec::new();
         // Expect 'paths' object
-        let paths = self.json.get("paths").and_then(JsonValue::as_object)
+        let paths = self
+            .json
+            .get("paths")
+            .and_then(JsonValue::as_object)
             .ok_or_else(|| Error::openapi("Missing 'paths' object"))?;
         for (path, item) in paths {
             // Only handle GET operations for now
@@ -128,14 +150,13 @@ impl OpenAPISpec {
             let endpoint = path.trim_start_matches('/').replace('/', "_");
             // Extract metadata
             let (summary, description, tags) = OpenAPISpec::extract_operation_metadata(item);
-            // Parameters
-            let openapi_params = self.extract_parameters_for_handler(item);
-            let parameters = JsonValue::Array(openapi_params.clone());
-            // Response properties
+            // Typed parameters and properties
+            let param_infos = self.extract_parameter_info(item);
             let (props_json, spec_file) = self.extract_properties_json_value(item, path)?;
-            let rows = OpenAPISpec::extract_row_properties(&props_json);
+            let property_infos = OpenAPISpec::extract_property_info(&props_json);
             // Build schema reference
-            let response_schema = OpenAPISpec::build_response_schema(&format!("{}Response", endpoint));
+            let response_schema =
+                OpenAPISpec::build_response_schema(&format!("{}Response", endpoint));
             // Assemble context
             let ctx = EndpointContext {
                 endpoint: endpoint.clone(),
@@ -145,10 +166,10 @@ impl OpenAPISpec {
                 properties_type: format!("{}Properties", endpoint),
                 response_type: format!("{}Response", endpoint),
                 envelope_properties: props_json.clone(),
-                properties: JsonValue::Array(rows.clone()),
-                properties_for_handler: rows.iter().filter_map(|r| r.get("name").and_then(JsonValue::as_str).map(String::from)).collect(),
-                parameters: JsonValue::Null,
-                openapi_parameters: JsonValue::Array(openapi_params),
+                properties: property_infos.clone(),
+                properties_for_handler: property_infos.iter().map(|p| p.name.clone()).collect(),
+                parameters: param_infos.clone(),
+                openapi_parameters: param_infos.clone(),
                 common_parameter_names: Vec::new(),
                 endpoint_specific_parameters: Vec::new(),
                 summary,
@@ -162,31 +183,6 @@ impl OpenAPISpec {
             contexts.push(ctx);
         }
         Ok(contexts)
-    }
-
-    /// Get a reference to the raw JSON value
-    pub fn as_json(&self) -> &JsonValue {
-        &self.json
-    }
-
-    /// Get the title of the API
-    pub fn title(&self) -> Option<&str> {
-        self.json.get("info")?.get("title")?.as_str()
-    }
-
-    /// Get the version of the API
-    pub fn version(&self) -> Option<&str> {
-        self.json.get("info")?.get("version")?.as_str()
-    }
-
-    /// Get the base path of the API
-    pub fn base_path(&self) -> Option<&str> {
-        self.json
-            .get("servers")?
-            .as_array()?
-            .first()?
-            .get("url")?
-            .as_str()
     }
 
     fn extract_operation_metadata(path_item: &JsonValue) -> (String, String, Vec<String>) {
@@ -248,27 +244,54 @@ impl OpenAPISpec {
         path_item: &JsonValue,
         endpoint: &str,
     ) -> crate::Result<(JsonValue, Option<String>)> {
-        let get_item = path_item.get("get").and_then(JsonValue::as_object)
-            .ok_or_else(|| Error::openapi(format!("No GET operation for endpoint '{}'", endpoint)))?;
-        let response = get_item.get("responses").and_then(JsonValue::as_object)
-            .and_then(|m| m.get("200")).and_then(JsonValue::as_object)
-            .ok_or_else(|| Error::openapi(format!("No 200 response for endpoint '{}'", endpoint)))?;
-        let content = response.get("content").and_then(JsonValue::as_object)
-            .and_then(|m| m.get("application/json")).and_then(JsonValue::as_object)
-            .ok_or_else(|| Error::openapi(format!("No application/json content for '{}'", endpoint)))?;
-        let schema = content.get("schema").and_then(JsonValue::as_object)
+        let get_item = path_item
+            .get("get")
+            .and_then(JsonValue::as_object)
+            .ok_or_else(|| {
+                Error::openapi(format!("No GET operation for endpoint '{}'", endpoint))
+            })?;
+        let response = get_item
+            .get("responses")
+            .and_then(JsonValue::as_object)
+            .and_then(|m| m.get("200"))
+            .and_then(JsonValue::as_object)
+            .ok_or_else(|| {
+                Error::openapi(format!("No 200 response for endpoint '{}'", endpoint))
+            })?;
+        let content = response
+            .get("content")
+            .and_then(JsonValue::as_object)
+            .and_then(|m| m.get("application/json"))
+            .and_then(JsonValue::as_object)
+            .ok_or_else(|| {
+                Error::openapi(format!("No application/json content for '{}'", endpoint))
+            })?;
+        let schema = content
+            .get("schema")
+            .and_then(JsonValue::as_object)
             .ok_or_else(|| Error::openapi(format!("No schema in content for '{}'", endpoint)))?;
-        let ref_str = schema.get("$ref").and_then(JsonValue::as_str)
+        let ref_str = schema
+            .get("$ref")
+            .and_then(JsonValue::as_str)
             .ok_or_else(|| Error::openapi(format!("No $ref in schema for '{}'", endpoint)))?;
         let key = "#/components/schemas/";
         if !ref_str.starts_with(key) {
-            return Err(Error::openapi(format!("Unexpected schema ref '{}'", ref_str)));
+            return Err(Error::openapi(format!(
+                "Unexpected schema ref '{}'",
+                ref_str
+            )));
         }
         let name = &ref_str[key.len()..];
-        let schemas = self.json.get("components").and_then(JsonValue::as_object)
-            .and_then(|m| m.get("schemas")).and_then(JsonValue::as_object)
+        let schemas = self
+            .json
+            .get("components")
+            .and_then(JsonValue::as_object)
+            .and_then(|m| m.get("schemas"))
+            .and_then(JsonValue::as_object)
             .ok_or_else(|| Error::openapi("No components.schemas section"))?;
-        let def = schemas.get(name).cloned()
+        let def = schemas
+            .get(name)
+            .cloned()
             .ok_or_else(|| Error::openapi(format!("Schema '{}' not found", name)))?;
         let props = def.get("properties").cloned().unwrap_or(JsonValue::Null);
         Ok((props, None))
@@ -277,13 +300,75 @@ impl OpenAPISpec {
     fn extract_row_properties(properties_json: &JsonValue) -> Vec<JsonValue> {
         if let Some(data) = properties_json.get("data").and_then(JsonValue::as_object) {
             if let Some(props) = data.get("properties").and_then(JsonValue::as_object) {
-                return props.iter().map(|(k,v)| json!({"name": k, "schema": v})).collect();
+                return props
+                    .iter()
+                    .map(|(k, v)| json!({"name": k, "schema": v}))
+                    .collect();
             }
         }
         if let Some(props) = properties_json.as_object() {
-            return props.iter().map(|(k,v)| json!({"name": k, "schema": v})).collect();
+            return props
+                .iter()
+                .map(|(k, v)| json!({"name": k, "schema": v}))
+                .collect();
         }
         Vec::new()
+    }
+
+    /// Extract typed parameter info for a handler
+    fn extract_parameter_info(&self, path_item: &JsonValue) -> Vec<ParameterInfo> {
+        self.extract_parameters_for_handler(path_item)
+            .into_iter()
+            .map(|param| {
+                let name = param
+                    .get("name")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let description = param
+                    .get("description")
+                    .and_then(JsonValue::as_str)
+                    .map(String::from);
+                let example = param.get("example").cloned();
+                ParameterInfo {
+                    name: name.clone(),
+                    rust_type: "String".to_string(),
+                    description,
+                    example,
+                }
+            })
+            .collect()
+    }
+
+    /// Extract typed property info from properties JSON
+    fn extract_property_info(properties_json: &JsonValue) -> Vec<PropertyInfo> {
+        OpenAPISpec::extract_row_properties(properties_json)
+            .into_iter()
+            .map(|prop| {
+                let name = prop
+                    .get("name")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let schema = prop.get("schema");
+                let title = schema
+                    .and_then(|s| s.get("title"))
+                    .and_then(JsonValue::as_str)
+                    .map(String::from);
+                let description = schema
+                    .and_then(|s| s.get("description"))
+                    .and_then(JsonValue::as_str)
+                    .map(String::from);
+                let example = schema.and_then(|s| s.get("example")).cloned();
+                PropertyInfo {
+                    name: name.clone(),
+                    rust_type: "String".to_string(),
+                    title,
+                    description,
+                    example,
+                }
+            })
+            .collect()
     }
 }
 
@@ -323,7 +408,8 @@ mod tests {
 
     #[test]
     fn test_extract_operation_metadata() {
-        let path_item = json!({"get": {"summary": "sum", "description": "desc", "tags": ["a","b"]}});
+        let path_item =
+            json!({"get": {"summary": "sum", "description": "desc", "tags": ["a","b"]}});
         let (sum, desc, tags) = OpenAPISpec::extract_operation_metadata(&path_item);
         assert_eq!(sum, "sum");
         assert_eq!(desc, "desc");
@@ -352,7 +438,9 @@ mod tests {
         });
         let spec = OpenAPISpec { json };
         let path_item = json!({"get": {"responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/T"}}}}}}});
-        let (props, file) = spec.extract_properties_json_value(&path_item, "/x").unwrap();
+        let (props, file) = spec
+            .extract_properties_json_value(&path_item, "/x")
+            .unwrap();
         assert_eq!(file, None);
         assert_eq!(props, json!({"a": {"type":"string"}}));
     }
@@ -361,7 +449,10 @@ mod tests {
     fn test_extract_row_properties() {
         let props = json!({"data": {"properties": {"k": 1, "m": 2}}});
         let rows = OpenAPISpec::extract_row_properties(&props);
-        let names: Vec<_> = rows.iter().filter_map(|r| r.get("name").and_then(JsonValue::as_str)).collect();
+        let names: Vec<_> = rows
+            .iter()
+            .filter_map(|r| r.get("name").and_then(JsonValue::as_str))
+            .collect();
         assert_eq!(names, vec!["k", "m"]);
     }
 }

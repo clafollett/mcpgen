@@ -10,6 +10,11 @@ use crate::manifest::TemplateManifest;
 use crate::template_kind::Template;
 
 use tokio::task;
+use crate::config::Config;
+use crate::openapi::OpenAPISpec;
+use crate::TemplateOptions;
+use serde_json::{Value as JsonValue, json};
+use tokio::fs;
 
 /// Manages loading and rendering of code generation templates
 #[derive(Debug)]
@@ -268,12 +273,102 @@ impl TemplateManager {
     pub fn has_template(&self, name: &str) -> bool {
         self.tera.get_template(name).is_ok()
     }
+
+    /// Generate code from loaded templates based on the OpenAPI spec and options
+    pub async fn generate(
+        &self,
+        spec: &OpenAPISpec,
+        config: &Config,
+        template_opts: Option<TemplateOptions>,
+    ) -> Result<()> {
+        // Create output directory
+        let output_path = PathBuf::from(&config.output_dir);
+        fs::create_dir_all(&output_path).await?;
+        // Iterate over manifest files
+        for file in &self.manifest.files {
+            let dest_path = output_path.join(&file.destination);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            // Per-operation generation
+            if file.for_each.as_deref() == Some("operation") {
+                if let Some(paths) = spec.as_json().get("paths").and_then(JsonValue::as_object) {
+                    for (path, methods) in paths {
+                        if let Some(methods_obj) = methods.as_object() {
+                            for (method, details) in methods_obj {
+                                let operation_id = details
+                                    .get("operationId")
+                                    .and_then(JsonValue::as_str)
+                                    .map(ToString::to_string)
+                                    .unwrap_or_else(|| format!("{}_{}", method.to_lowercase(), path.replace('/', "_")));
+                                let include_operation = template_opts
+                                    .as_ref()
+                                    .map(|opts| opts.all_operations || opts.include_operations.is_empty() || opts.include_operations.contains(&operation_id))
+                                    .unwrap_or(true);
+                                let exclude_operation = template_opts
+                                    .as_ref()
+                                    .map(|opts| opts.exclude_operations.contains(&operation_id))
+                                    .unwrap_or(false);
+                                if include_operation && !exclude_operation {
+                                    let mut context = file.context.clone();
+                                    if let JsonValue::Object(ref mut obj) = context {
+                                        obj.insert("operation_id".to_string(), json!(operation_id));
+                                        obj.insert("method".to_string(), json!(method.to_uppercase()));
+                                        obj.insert("path".to_string(), json!(path));
+                                        if let Some(opts) = &template_opts {
+                                            if let Some(additional_ctx) = &opts.context {
+                                                if let Some(additional_obj) = additional_ctx.as_object() {
+                                                    for (k, v) in additional_obj {
+                                                        obj.insert(k.clone(), v.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    self.generate_with_context(&file.source, &context, &dest_path).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Single-file generation
+                let mut context = file.context.clone();
+                if let Some(opts) = &template_opts {
+                    if let Some(additional_ctx) = &opts.context {
+                        if let (Some(obj), Some(additional_obj)) = (context.as_object_mut(), additional_ctx.as_object()) {
+                            for (k, v) in additional_obj {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+                self.generate_with_context(&file.source, &context, &dest_path).await?;
+            }
+        }
+        // Post-generation hook
+        if let Some(ref hook) = self.manifest.hooks.post_generate {
+            match hook.as_str() {
+                "cargo_fmt" => {
+                    if let Ok(mut cmd) = std::process::Command::new("cargo").args(["fmt", "--"]).current_dir(&output_path).spawn() {
+                        let _ = cmd.wait();
+                    }
+                }
+                _ => log::warn!("Unknown post-generation hook: {}", hook),
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::template_kind::Template;
+    use crate::config::Config;
+    use crate::openapi::OpenAPISpec;
+    use serde_json::json;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_template_manager() -> Result<()> {
@@ -372,6 +467,48 @@ mod tests {
             "Generated file should contain the handler name"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_generate_single_file() -> Result<()> {
+        // Setup a temporary directory for templates and output
+        let temp = TempDir::new().unwrap();
+        let td = temp.path();
+        // Write a simple template file
+        let tera_content = "Message: {{message}}";
+        tokio::fs::write(td.join("foo.tera"), tera_content).await.unwrap();
+        // Write the manifest.yaml
+        let manifest = r#"
+name: test-template
+description: Test template
+version: 0.1.0
+language: rust
+files:
+  - source: foo.tera
+    destination: foo.txt
+    context:
+      message: hello
+"#;
+        tokio::fs::write(td.join("manifest.yaml"), manifest).await.unwrap();
+        // Create a minimal OpenAPI spec file
+        let spec_json = json!({"paths": {}});
+        let spec_file = td.join("spec.json");
+        tokio::fs::write(&spec_file, spec_json.to_string()).await.unwrap();
+        // Prepare config pointing to output directory
+        let out_dir = temp.path().join("out");
+        let config = Config::new(
+            spec_file.to_str().unwrap(),
+            out_dir.to_str().unwrap(),
+        );
+        // Initialize TemplateManager with our temp dir
+        let manager = TemplateManager::new(Template::RustAxum, Some(td.to_path_buf())).await?;
+        // Load spec and generate
+        let spec = OpenAPISpec::from_file(&spec_file).await?;
+        manager.generate(&spec, &config, None).await?;
+        // Read and verify the generated file
+        let result = tokio::fs::read_to_string(out_dir.join("foo.txt")).await.unwrap();
+        assert_eq!(result.trim(), "Message: hello");
         Ok(())
     }
 }
