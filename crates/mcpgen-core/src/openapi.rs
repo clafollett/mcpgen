@@ -27,6 +27,8 @@
 use serde_json::Value as JsonValue;
 use std::path::Path;
 use tokio::fs;
+use serde::{Deserialize, Serialize};
+use serde_json::Map as JsonMap;
 
 /// Represents an OpenAPI specification
 #[derive(Debug)]
@@ -80,6 +82,37 @@ impl OpenAPISpec {
             .first()?
             .get("url")?
             .as_str()
+    }
+
+    /// Parsed endpoint context for template rendering
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct EndpointContext {
+        pub endpoint: String,
+        pub endpoint_cap: String,
+        pub fn_name: String,
+        pub parameters_type: String,
+        pub properties_type: String,
+        pub response_type: String,
+        pub envelope_properties: JsonValue,
+        pub properties: JsonValue,
+        pub properties_for_handler: Vec<String>,
+        pub parameters: JsonValue,
+        pub openapi_parameters: JsonValue,
+        pub common_parameter_names: Vec<String>,
+        pub endpoint_specific_parameters: Vec<String>,
+        pub summary: String,
+        pub description: String,
+        pub tags: Vec<String>,
+        pub properties_schema: JsonMap<String, JsonValue>,
+        pub response_schema: JsonValue,
+        pub spec_file_name: Option<String>,
+        pub valid_fields: Vec<String>,
+    }
+
+    /// Parse endpoints from the OpenAPI spec.
+    pub fn parse_endpoints(&self) -> crate::Result<Vec<EndpointContext>> {
+        // TODO: port parsing logic from generate_handlers.rs
+        unimplemented!()
     }
 }
 
