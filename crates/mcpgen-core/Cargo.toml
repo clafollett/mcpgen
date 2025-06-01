@@ -16,7 +16,7 @@ log = "0.4"
 regex = "1.9"
 url = "2.4"
 anyhow = "1.0"
-tokio = { version = "1.0", features = ["fs", "io-util", "rt", "macros"] }
+tokio = { version = "1.0", features = ["fs", "io-util", "rt-multi-thread", "macros", "process"] }
 tera = "1.19"
 clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"

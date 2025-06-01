@@ -31,23 +31,14 @@ impl TemplateManager {
     /// directory will be discovered based on the language and framework.
     pub async fn new(template_kind: Template, template_dir: Option<PathBuf>) -> Result<Self> {
         let template_dir = if let Some(dir) = template_dir {
-            // If a template directory was provided, use it directly
-            let template_dir = if template_kind == Template::Custom {
-                // For custom templates, use the provided directory as-is
-                dir
-            } else {
-                // For built-in templates, append the template kind to the provided directory
-                dir.join(template_kind.as_str())
-            };
-            
-            if !template_dir.exists() {
+            // Use the provided template directory directly
+            if !dir.exists() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("Template directory not found: {}", template_dir.display()),
+                    format!("Template directory not found: {}", dir.display()),
                 ).into());
             }
-            
-            tokio::fs::canonicalize(&template_dir)
+            tokio::fs::canonicalize(&dir)
                 .await
                 .map_err(|e| {
                     io::Error::new(
