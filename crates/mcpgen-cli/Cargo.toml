@@ -1,17 +1,21 @@
 [package]
 name = "mcpgen"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "CLI for generating MCP servers from OpenAPI specs"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 mcpgen-core = { path = "../mcpgen-core" }
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
 anyhow = "1.0"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
+
+[dev-dependencies]
+tempfile = "3.10"

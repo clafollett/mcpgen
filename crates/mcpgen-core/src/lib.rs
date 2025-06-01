@@ -1,231 +1,261 @@
-//! Core library for generating MCP servers from OpenAPI specifications.
+//! MCPGen Core Library
+//! 
+//! This library provides the core functionality for generating MCP (Model-Controller-Presenter)
+//! server code from OpenAPI specifications.
 
-use std::path::Path;
-use thiserror::Error;
+#![warn(missing_docs)]
+#![warn(rustdoc::missing_crate_level_docs)]
+#![forbid(unsafe_code)]
 
+use std::path::PathBuf;
+use std::str::FromStr;
+use tokio::fs;
+use serde_json::{json, Value as JsonValue};
+
+// Re-export the Result type and Error enum from the error module
+pub use error::{Error, Result};
+pub use config::Config;
+
+pub mod config;
+pub mod error;
 pub mod generator;
+pub mod manifest;
 pub mod openapi;
 pub mod template;
+pub mod template_kind;
 
-/// Errors that can occur during MCP generation
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("YAML parsing error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
-
-    #[error("JSON parsing error: {0}")]
-    Json(#[from] serde_json::Error),
-
-    #[error("OpenAPI error: {0}")]
-    OpenApi(String),
-
-    #[error("Template error: {0}")]
-    Template(String),
-
-    #[error("Template engine error: {0}")]
-    Tera(#[from] tera::Error),
-}
+use openapi::OpenAPISpec;
+use template::TemplateManager;
+use template_kind::Template;
 
 /// Result type for MCP generation operations
-pub type Result<T> = std::result::Result<T, Error>;
+pub type MCPResult<T> = std::result::Result<T, Error>;
 
-/// Configuration for MCP server generation
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct Config {
-    /// Path to the OpenAPI specification file
-    pub openapi_spec: String,
-
-    /// Output directory for generated code
-    pub output_dir: String,
-
-    /// Template to use for code generation
-    #[serde(default = "default_template")]
-    pub template: String,
-
-    /// Whether to include all operations (default: false)
-    #[serde(default)]
-    pub include_all: bool,
-
-    /// List of operations to include (if include_all is false)
-    #[serde(default)]
+/// Options for template generation
+#[derive(Debug, Default, Clone)]
+pub struct TemplateOptions {
+    /// Whether to include all operations by default
+    pub all_operations: bool,
+    
+    /// Whether to generate tests
+    pub include_tests: bool,
+    
+    /// Whether to overwrite existing files
+    pub overwrite: bool,
+    
+    /// Additional context to pass to templates
+    pub context: Option<JsonValue>,
+    
+    /// Specific operations to include (overrides all_operations if not empty)
     pub include_operations: Vec<String>,
-
-    /// List of operations to exclude (if include_all is true)
-    #[serde(default)]
+    
+    /// Operations to exclude
     pub exclude_operations: Vec<String>,
+    
+    /// Server port for the generated application
+    pub server_port: Option<u16>,
+    
+    /// Log file path for the generated application
+    pub log_file: Option<String>,
 }
 
-fn default_template() -> String {
-    "axum-basic".to_string()
-}
-
-impl Config {
-    /// Create a new Config with default values
-    pub fn new(openapi_spec: impl Into<String>, output_dir: impl Into<String>) -> Self {
-        Self {
-            openapi_spec: openapi_spec.into(),
-            output_dir: output_dir.into(),
-            template: default_template(),
-            include_all: false,
-            include_operations: Vec::new(),
-            exclude_operations: Vec::new(),
+/// Main entry point for code generation
+/// Generate code using a pre-initialized TemplateManager
+pub async fn generate_with_template_manager(
+    config: &Config,
+    template_manager: TemplateManager,
+    _template_opts: TemplateOptions,  // Prefix with underscore to indicate it's intentionally unused for now
+) -> Result<()> {
+    // 1. Load OpenAPI spec to validate it exists and is valid
+    let _spec = OpenAPISpec::from_file(&config.openapi_spec).await?;
+    
+    // 2. Create output directory
+    let output_path = PathBuf::from(&config.output_dir);
+    fs::create_dir_all(&output_path).await?;
+    
+    // 3. Generate files based on the template manifest
+    for file in &template_manager.manifest.files {
+        let dest_path = output_path.join(&file.destination);
+        
+        // Create parent directories if they don't exist
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent).await?;
         }
-    }
-
-    /// Load configuration from a file
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path_ref = path.as_ref();
-        let content = std::fs::read_to_string(path_ref)?;
-        let config = if path_ref.extension().map_or(false, |ext| ext == "json") {
-            serde_json::from_str(&content)?
-        } else {
-            serde_yaml::from_str(&content)?
-        };
-        Ok(config)
-    }
-
-    /// Save configuration to a file
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = if path.as_ref().extension().map_or(false, |ext| ext == "json") {
-            serde_json::to_string_pretty(self)?
-        } else {
-            serde_yaml::to_string(self)?
-        };
-        std::fs::write(path, content)?;
-        Ok(())
-    }
-}
-
-/// Generate MCP server code from a configuration
-pub async fn generate(config: &Config) -> Result<()> {
-    log::info!(
-        "Generating MCP server from OpenAPI spec: {}",
-        config.openapi_spec
-    );
-    log::debug!("Using template: {}", config.template);
-
-    // 1. Load and parse OpenAPI spec
-    let spec = openapi::parser::parse_spec(Path::new(&config.openapi_spec)).await?;
-    // .as_json() removed; use spec directly or convert as needed.
-
-    // 2. Set up template manager
-    let template_dir = Path::new(&config.output_dir).join("templates");
-    let template_manager = template::TemplateManager::new(&template_dir)?;
-
-    // 3. Extract endpoints and generate handlers
-    let mut endpoints = Vec::new();
-
-    if let Some(paths) = spec.as_json().get("paths") {
-        if let Some(paths_obj) = paths.as_object() {
-            for (path, methods) in paths_obj {
-                if let Some(methods_obj) = methods.as_object() {
-                    for (method, details) in methods_obj {
-                        // Skip if not included or explicitly excluded
-                        let operation_id = format!("{} {}", method.to_uppercase(), path);
-                        if !config.include_all && !config.include_operations.contains(&operation_id)
-                            || config.exclude_operations.contains(&operation_id)
-                        {
-                            continue;
-                        }
-
-                        // Extract endpoint info
-                        let endpoint = path
-                            .trim_start_matches('/')
-                            .replace('/', "_")
-                            .replace('{', "")
-                            .replace('}', "");
-
-                        let mut endpoint_info = std::collections::HashMap::new();
-                        endpoint_info.insert("endpoint".to_string(), endpoint.clone());
-                        endpoint_info.insert("method".to_string(), method.to_uppercase());
-                        endpoint_info.insert("path".to_string(), path.to_string());
-                        endpoint_info
-                            .insert("fn_name".to_string(), format!("{}_handler", endpoint));
-
-                        if let Some(details_obj) = details.as_object() {
-                            if let Some(summary) = details_obj.get("summary") {
-                                endpoint_info.insert(
-                                    "summary".to_string(),
-                                    summary.as_str().unwrap_or("").to_string(),
-                                );
-                            }
-                            if let Some(description) = details_obj.get("description") {
-                                endpoint_info.insert(
-                                    "description".to_string(),
-                                    description.as_str().unwrap_or("").to_string(),
-                                );
-                            }
-                            if let Some(tags) = details_obj.get("tags") {
-                                if let Some(tags_arr) = tags.as_array() {
-                                    if let Some(first_tag) = tags_arr.first() {
-                                        endpoint_info.insert(
-                                            "tag".to_string(),
-                                            first_tag.as_str().unwrap_or("").to_string(),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        endpoints.push(endpoint_info);
-                    }
-                }
-            }
+        
+        // All source files must be Tera templates
+        if !file.source.ends_with(".tera") {
+            return Err(Error::Template(format!(
+                "Template source file '{}' must have .tera extension",
+                file.source
+            )));
         }
+        
+        // Get the template name (relative path with forward slashes)
+        // and ensure it matches the name used when loading the template
+        let template_name = file.source
+            .replace('\\', "/")
+            .trim_start_matches("./")
+            .to_string();
+        
+        // Create a basic context with project name (extracted from output_dir)
+        let project_name = config.output_dir
+            .split(std::path::MAIN_SEPARATOR)
+            .last()
+            .unwrap_or("my_project")
+            .to_string();
+            
+        // Create context with required variables for templates
+        let context = serde_json::json!({ 
+            "project_name": project_name,
+            "app_name": project_name, // Used in Cargo.toml.tera
+            // Add an empty handlers string to satisfy the template
+            "handlers": ""
+        });
+        
+        // Render the template
+        template_manager.generate_with_context(&template_name, &context, &dest_path).await?;
     }
-
-    // 4. Generate handlers module
-    let handlers_dir = Path::new(&config.output_dir).join("src/handlers");
-    tokio::fs::create_dir_all(&handlers_dir).await?;
-
-    template_manager
-        .generate_handlers_mod(endpoints.clone(), handlers_dir.join("mod.rs"))
-        .await?;
-
-    // 5. Generate individual handler files
-    for endpoint_info in endpoints {
-        template_manager
-            .generate_handler(
-                "handler.rs",
-                &endpoint_info,
-                handlers_dir.join(format!("{}.rs", endpoint_info["endpoint"])),
-            )
+    
+    // 4. Run post-generation hooks if any
+    if let Some(cmd) = &template_manager.manifest.hooks.post_generate {
+        // Execute the command
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .current_dir(&output_path)
+            .status()
             .await?;
+            
+        if !status.success() {
+            return Err(Error::Template(format!(
+                "Post-generation hook failed with status: {}",
+                status
+            )));
+        }
     }
-
+    
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_config_roundtrip() -> Result<()> {
-        let mut config = Config::new("api.yaml", "output");
-        config.include_all = true;
-        config.exclude_operations = vec!["unwanted.endpoint".to_string()];
-
-        let file = NamedTempFile::new()?;
-        let path = file.path().to_path_buf();
-
-        // Test YAML
-        config.save(&path)?;
-        let loaded = Config::from_file(&path)?;
-        assert_eq!(config.openapi_spec, loaded.openapi_spec);
-        assert_eq!(config.include_all, loaded.include_all);
-
-        // Test JSON
-        let json_path = path.with_extension("json");
-        config.save(&json_path)?;
-        let loaded_json = Config::from_file(&json_path)?;
-        assert_eq!(config.openapi_spec, loaded_json.openapi_spec);
-
-        Ok(())
+/// Main entry point for code generation
+pub async fn generate(config: &Config, template_opts: Option<TemplateOptions>) -> Result<()> {
+    // 1. Load OpenAPI spec
+    let spec = OpenAPISpec::from_file(&config.openapi_spec).await?;
+    
+    // 2. Initialize template manager
+    let template_kind = Template::from_str(&config.template).unwrap_or_default();
+    let template_manager = TemplateManager::new(template_kind, None).await?;
+    
+    // 3. Create output directory
+    let output_path = PathBuf::from(&config.output_dir);
+    fs::create_dir_all(&output_path).await?;
+    
+    // 4. Generate files based on template manifest
+    for file in &template_manager.manifest.files {
+        let dest_path = output_path.join(&file.destination);
+        
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        
+        // If this is a template that should be generated per operation
+        if let Some("operation") = file.for_each.as_deref() {
+            if let Some(paths) = spec.as_json().get("paths") {
+                if let Some(paths_obj) = paths.as_object() {
+                    for (path, methods) in paths_obj {
+                        if let Some(methods_obj) = methods.as_object() {
+                            for (method, details) in methods_obj {
+                                let operation_id = details
+                                    .get("operationId")
+                                    .and_then(|id| id.as_str())
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| {
+                                        format!("{}_{}", method.to_lowercase(), path.replace('/', "_"))
+                                    });
+                                
+                                // Check if we should include this operation
+                                let include_operation = template_opts
+                                    .as_ref()
+                                    .map(|opts| opts.all_operations || opts.include_operations.is_empty() || opts.include_operations.contains(&operation_id))
+                                    .unwrap_or(true);
+                                
+                                let exclude_operation = template_opts
+                                    .as_ref()
+                                    .map(|opts| opts.exclude_operations.contains(&operation_id))
+                                    .unwrap_or(false);
+                                
+                                if include_operation && !exclude_operation {
+                                    // Create operation-specific context
+                                    let mut context = file.context.clone();
+                                    if let serde_json::Value::Object(ref mut obj) = context {
+                                        obj.insert("operation_id".to_string(), json!(operation_id));
+                                        obj.insert("method".to_string(), json!(method.to_uppercase()));
+                                        obj.insert("path".to_string(), json!(path));
+                                        
+                                        // Add any additional context from template options
+                                        if let Some(opts) = &template_opts {
+                                            if let Some(additional_ctx) = &opts.context {
+                                                if let Some(additional_obj) = additional_ctx.as_object() {
+                                                    for (k, v) in additional_obj {
+                                                        obj.insert(k.clone(), v.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Generate the file with the operation context
+                                    template_manager.generate_with_context(
+                                        &file.source,
+                                        &context,
+                                        &dest_path
+                                    ).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Generate a single file with any additional context
+            let mut context = file.context.clone();
+            if let Some(opts) = &template_opts {
+                if let Some(additional_ctx) = &opts.context {
+                    if let (Some(obj), Some(additional_obj)) = (context.as_object_mut(), additional_ctx.as_object()) {
+                        for (k, v) in additional_obj {
+                            obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            
+            template_manager.generate_with_context(
+                &file.source,
+                &context,
+                &dest_path
+            ).await?;
+        }
     }
+    
+    // 5. Run post-generation hooks if defined
+    if let Some(ref hook) = template_manager.manifest.hooks.post_generate {
+        match hook.as_str() {
+            "cargo_fmt" => {
+                // Run cargo fmt for Rust projects
+                if let Ok(mut cmd) = std::process::Command::new("cargo")
+                    .args(["fmt", "--"])
+                    .current_dir(&output_path)
+                    .spawn() 
+                {
+                    let _ = cmd.wait();
+                }
+            }
+            _ => {
+                log::warn!("Unknown post-generation hook: {}", hook);
+            }
+        }
+    }
+    
+    Ok(())
 }

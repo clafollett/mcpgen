@@ -1,0 +1,144 @@
+//! Auto-generated handler for `/{{ endpoint }}` endpoint.
+
+// Internal imports (std, crate)
+use crate::common::*;
+use crate::config::FdicApiConfig;
+
+// External imports (alphabetized)
+use rmcp::handler::server::tool::IntoCallToolResult;
+use rmcp::model::*;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing::{debug, error, info};
+use utoipa::ToSchema;
+
+/// Auto-generated parameters struct for `/{{ endpoint }}` endpoint.
+/// Spec: {{ spec_file_name | default(value="") }}
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, ToSchema)]
+pub struct {{ parameters_type }} {
+    {% for p in parameters %}{%- if p.description %}
+    #[schemars(description = r#"{{ p.description }}"#)]
+    {%- endif %}
+    pub {{ p.name }}: Option<{{ p.rust_type }}>,
+    {%- endif %}{% endfor %}
+}
+
+// Implement Endpoint for generic handler
+impl Endpoint for {{ parameters_type }} {
+    fn name() -> &'static str {
+        "{{ endpoint }}"
+    }
+
+    fn get_params(&self) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        {% for p in parameters %}{% if p.name not in common_list %}
+        if let Some(val) = &self.{{ p.name }} {
+            params.insert("{{ p.name }}".to_string(), val.to_string());
+        }
+        {%- endif %}{% endfor %}
+        params
+    }
+}
+
+/// Auto-generated properties struct for `/{{ endpoint }}` endpoint.
+/// Spec: {{ spec_file_name | default(value="") }}
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, ToSchema)]
+pub struct {{ properties_type }} {
+{%- for prop in properties %}
+    #[schemars(description = r#"{{ prop.title }} - {{ prop.description }}"#)]
+    pub {{ prop.name | snake_case }}: Option<{{ prop.rust_type }}>,
+{% endfor %}
+}
+
+#[derive(Clone,Debug, Serialize, Deserialize, JsonSchema, ToSchema)]
+pub struct {{ endpoint_cap }}Response {
+    pub data: Vec<serde_json::Value>,
+    pub meta: ResponseMeta,
+    pub totals: ResponseTotals,
+}
+
+impl IntoContents for {{ endpoint_cap }}Response {
+    fn into_contents(self) -> Vec<Content> {
+        // Convert the response into a Vec<Content> as expected by MCP
+        // Panics only if serialization fails, which should be impossible for valid structs
+        vec![Content::json(self).expect("Failed to serialize {{ endpoint_cap }}Response to Content")]
+    }
+}
+
+/// `/{{ endpoint }}` endpoint handler
+/// {{ summary }}
+{% if description -%}
+/// {{ description }}
+{%- endif %}
+{% if parameters -%}
+#[doc = r#"{% for p in parameters %}{%- if p.name %} - `{{ p.name }}` ({{ p.rust_type }}, optional): {{ p.description | trim }}{% if p.example %}
+{{ p.example }}{% endif %}{% endif %}{% endfor %}"#]
+{%- endif %}
+#[doc = r#"Verb: GET
+Path: /{{ endpoint }}
+Parameters: {{ parameters_type }}
+Responses:
+    200: Successful Operation
+    400: Bad input parameter
+    500: Internal Server Error
+    502: Bad Gateway
+    503: Service Unavailable
+    504: Gateway Timeout
+Tag: {{ tags.0 }}"#]
+pub async fn {{ endpoint }}_handler(config: &ApiConfig, params: &{{ parameters_type }}) -> Result<CallToolResult, rmcp::Error> {
+    // Log incoming request parameters and request details as structured JSON
+    info!(
+        target = "handler",
+        event = "incoming_request",
+        endpoint = "{{ endpoint }}",
+        method = "GET",
+        path = "/{{ endpoint }}",
+        params = serde_json::to_string(params).unwrap()
+    );
+    debug!(target = "handler", event = "before_api_call", endpoint = "{{ endpoint }}");
+    let resp = get_endpoint_response::<_, {{ endpoint_cap }}Response>(config, params).await;
+
+    match &resp {
+        Ok(r) => {
+            info!(
+                target = "handler",
+                event = "api_response",
+                endpoint = "{{ endpoint }}",
+                meta = ?r.meta,
+                totals = ?r.totals
+            );
+        },
+        Err(e) => {
+            error!(target = "handler", event = "fdic_api_error", endpoint = "{{ endpoint }}", error = ?e);
+        }
+    }
+
+    // Log outgoing FDIC API request as structured JSON
+    resp.and_then(|r| r.into_call_tool_result())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+    #[test]
+    fn test_parameters_struct_serialization() {
+        let params = {{ parameters_type }} {
+            common: CommonParameters::default(),
+            {% for p in parameters %}{% if p.name | lower not in common_parameter_names -%}
+            {{ p.name | lower }}: None,
+            {% endif %}{%- endfor %}
+        };
+        let _ = serde_json::to_string(&params).unwrap();
+    }
+
+    #[test]
+    fn test_properties_struct_serialization() {
+        let props = {{ properties_type }} {
+            {% for prop in properties %}{{ prop.name | lower }}: None,
+            {% endfor -%}
+        };
+        let _ = serde_json::to_string(&props).unwrap();
+    }
+}

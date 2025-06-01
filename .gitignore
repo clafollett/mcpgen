@@ -1,1 +1,4 @@
 /target
+
+# Generated code
+.mcpgen_scaffold/

@@ -1,4 +1,4 @@
-# .windsurfrules for fdic-bank-find-mcp-server
+# .windsurfrules for mcpgen
 
 ## Prime Directive: Do It Right the First Time
 - **IMPORTANT!!!!!** All code, tests, and documentation must be written with maximum accuracy and completeness on the first attempt. No shortcuts, sloppiness, or incomplete implementations are permitted. Any code or test that does not fully match the requirements, struct definitions, or project standards must be considered a failure and corrected immediately.

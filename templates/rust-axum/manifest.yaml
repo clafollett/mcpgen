@@ -1,0 +1,23 @@
+# Template manifest for rust-axum server
+description: A Rust server using the Axum web framework
+template_files:
+  - Cargo.toml.tera
+  - common.rs.tera
+  - handler.rs.tera
+  - handlers_mod.rs.tera
+  - main.rs.tera
+
+template_variables:
+  project_name:
+    description: Name of the project
+    required: true
+    type: string
+  
+  api_version:
+    description: API version
+    default: "1.0.0"
+    type: string
+
+required_directories:
+  - src
+  - src/handlers

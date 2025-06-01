@@ -1,0 +1,172 @@
+//! Main entry point for the generated Axum MCP server
+
+// Internal modules
+mod config;
+mod handlers;
+
+// Internal imports (std, crate)
+use crate::config::Config;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+// External imports (alphabetized)
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use dotenvy::dotenv;
+use log::debug;
+use std::net::SocketAddr;
+use tokio::signal;
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize environment variables from .env file if present
+    dotenv().ok();
+
+    // Load application config
+    let cfg = Arc::new(Mutex::new(Config::load()));
+    
+    // Create log directory from config
+    let log_dir = {
+        let mut cfg_guard = cfg.lock().await;
+        std::fs::create_dir_all(&cfg_guard.log_dir)?;
+        // Update log file name and port from template variables
+        cfg_guard.log_file = "{{ log_file }}".to_string();
+        cfg_guard.port = {{ server_port }};
+        cfg_guard.log_dir.clone()
+    };
+
+    // === Dual Logging Setup (configurable) ===
+    // 1. File logger (daily rotation, async non-blocking)
+    let file_appender = RollingFileAppender::new(
+        Rotation::DAILY, 
+        &log_dir, 
+        &format!("{}.log", "{{ log_file }}")
+    );
+    let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
+
+    // 2. Stderr logger (async non-blocking)
+    let (stderr_writer, stderr_guard) = tracing_appender::non_blocking(std::io::stderr());
+    
+    // 3. Combine writers using .and()
+    let multi_writer = file_writer.and(stderr_writer);
+
+    // Initialize tracing subscriber with JSON formatting
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+        
+    tracing_subscriber::fmt()
+        .json()
+        .with_writer(multi_writer)
+        .with_env_filter(filter)
+        .init();
+
+    debug!("Starting MCP server...");
+
+    // Build application with routes
+    let app = Router::new()
+        .route("/", get(root_handler))
+        .route("/health", get(|| async { "OK" }))
+        .with_state(cfg.clone());
+        
+    // If you want to include handlers from the handlers module:
+    // .nest("/api", handlers::router())
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], {{ server_port }}));
+    debug!("Server listening on {}", addr);
+    
+    // Create a shutdown signal for graceful shutdown
+    let shutdown = async {
+        let ctrl_c = async {
+            signal::ctrl_c()
+                .await
+                .expect("Failed to install Ctrl+C handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to install signal handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
+        debug!("Shutdown signal received, starting graceful shutdown...");
+    };
+
+    // Start the server with graceful shutdown
+    let server = axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .with_graceful_shutdown(shutdown);
+
+    debug!("Server started successfully");
+    
+    // Run the server and handle errors
+    if let Err(e) = server.await {
+        eprintln!("Server error: {}", e);
+        std::process::exit(1);
+    }
+
+    // Keep file_guard and stderr_guard alive until the end of main()
+    drop(file_guard);
+    drop(stderr_guard);
+    
+    debug!("Server shutdown complete");
+    Ok(())
+}
+
+/// Root handler that returns a welcome message
+async fn root_handler() -> axum::response::Json<serde_json::Value> {
+    axum::response::Json(serde_json::json!({
+        "meta": {
+            "service": "mcp-server",
+            "version": env!("CARGO_PKG_VERSION"),
+            "status": "ok"
+        },
+        "data": {
+            "message": "MCP server is running"
+        }
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use http_body_util::BodyExt;
+    use serde_json::Value;
+    use tower::ServiceExt; // for `oneshot`
+
+    #[tokio::test]
+    async fn test_root_handler() {
+        let app = Router::new().route("/", get(root_handler));
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body_bytes).expect("response is valid JSON");
+        assert_eq!(json["meta"]["service"], "mcp-server");
+        assert_eq!(json["meta"]["status"], "ok");
+        assert!(json["meta"]["version"].is_string());
+        assert_eq!(json["data"]["message"], "MCP server is running");
+    }
+}

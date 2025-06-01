@@ -1,1 +1,7 @@
 *.tmp
+# Ignore integration test output directories (e.g., for generated code)
+generated/
+# Ignore any tempdirs that may be created by tests
+tmp*/
+# Defensive: ignore any stray test output artifacts
+*.test-output
