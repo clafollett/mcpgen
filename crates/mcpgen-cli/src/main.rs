@@ -6,6 +6,7 @@ use clap::Parser;
 use mcpgen_core::TemplateOptions;
 use mcpgen_core::template::TemplateManager;
 use mcpgen_core::template_kind::Template;
+use mcpgen_core::openapi::OpenAPISpec;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -74,31 +75,24 @@ async fn main() -> anyhow::Result<()> {
                 template_kind
             );
 
-            // Get the template directory
-            let template_dir_path = if template_kind == Template::Custom {
-                // For custom templates, use the provided directory or default to ./templates
-                template_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from("./templates"))
+            // Determine the template directory, honoring --template-dir if provided
+            let template_dir_path = if let Some(dir) = template_dir.clone() {
+                dir
+            } else if template_kind == Template::Custom {
+                PathBuf::from("./templates")
             } else {
-                // For built-in templates, use the workspace templates directory
+                // For built-in templates, use workspace templates/<template>
                 let manifest_dir = env!("CARGO_MANIFEST_DIR");
-                println!("DEBUG - CARGO_MANIFEST_DIR: {}", manifest_dir);
-                
-                // Go up to the workspace root (from crates/mcpgen-cli -> mcpgen)
                 let workspace_root = Path::new(manifest_dir)
-                    .parent() // crates
-                    .and_then(Path::parent) // workspace root
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Failed to determine workspace root from CARGO_MANIFEST_DIR"
-                        )
-                    })?;
-                
+                    .parent()
+                    .and_then(Path::parent)
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "Failed to determine workspace root from CARGO_MANIFEST_DIR"
+                    ))?;
                 let templates_dir = workspace_root.join("templates");
-                let template_dir = templates_dir.join(template_kind.as_str());
-                println!("DEBUG - Full template directory: {}", template_dir.display());
-                template_dir
+                let built_in_dir = templates_dir.join(template_kind.as_str());
+                println!("DEBUG - Full template directory: {}", built_in_dir.display());
+                built_in_dir
             };
 
             println!("Using template directory: {}", template_dir_path.display());
@@ -108,23 +102,15 @@ async fn main() -> anyhow::Result<()> {
                 fs::create_dir_all(&template_dir_path)
                     .await
                     .context("Failed to create template directory")?;
-                println!(
-                    "Created template directory at: {}",
-                    template_dir_path.display()
-                );
+                println!("Created template directory at: {}", template_dir_path.display());
             }
 
-            // For built-in templates, we need to pass the parent directory of the template
-            // (e.g., /path/to/templates instead of /path/to/templates/rust-axum)
-            let template_manager = if template_kind == Template::Custom {
-                TemplateManager::new(template_kind, Some(template_dir_path)).await
-            } else {
-                let parent_dir = template_dir_path.parent().ok_or_else(|| {
-                    anyhow::anyhow!("Failed to get parent directory of template path")
-                })?;
-                println!("DEBUG - Using template base directory: {}", parent_dir.display());
-                TemplateManager::new(template_kind, Some(parent_dir.to_path_buf())).await
-            }
+            // Initialize the template manager using the resolved template directory
+            let template_manager = TemplateManager::new(
+                template_kind,
+                Some(template_dir_path.clone()),
+            )
+            .await
             .context("Failed to initialize template manager")?;
 
             // List available templates for debugging
@@ -174,13 +160,11 @@ async fn main() -> anyhow::Result<()> {
                 exclude_operations: Vec::new(), // No operations to exclude
             };
 
-            // Generate the code using our template manager
-            if let Err(e) = mcpgen_core::generate_with_template_manager(
-                &config,
-                template_manager,
-                template_opts,
-            )
-            .await
+            // Load OpenAPI spec and generate code
+            let spec_obj = OpenAPISpec::from_file(&config.openapi_spec).await?;
+            if let Err(e) = template_manager
+                .generate(&spec_obj, &config, Some(template_opts))
+                .await
             {
                 eprintln!("Codegen failed: {e}");
                 std::process::exit(1);

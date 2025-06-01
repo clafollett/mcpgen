@@ -13,7 +13,7 @@ use tokio::task;
 use crate::config::Config;
 use crate::openapi::OpenAPISpec;
 use crate::TemplateOptions;
-use serde_json::{Value as JsonValue, json};
+use serde_json::{Value as JsonValue, json, Map};
 use tokio::fs;
 
 /// Manages loading and rendering of code generation templates
@@ -204,16 +204,26 @@ impl TemplateManager {
         })?;
 
         tokio::fs::create_dir_all(parent).await?;
-
+        
         // Log the template being rendered
         log::debug!("Rendering template: {}", template_name);
         log::debug!("Output path: {}", output_path.display());
         log::debug!("Parent directory: {}", parent.display());
         
-        // Convert the context to a Tera Context
-        log::debug!("Creating Tera context...");
-        let tera_context = Context::from_serialize(context)
-            .map_err(|e| crate::Error::template(format!("Failed to create Tera context: {}", e)))?;
+        // Build Tera Context manually from JSON object
+        let mut tera_context = Context::new();
+        // Serialize provided context into JSON value
+        let data_value = serde_json::to_value(context)
+            .map_err(|e| crate::Error::template(format!("Failed to serialize context: {}", e)))?;
+        if let Some(map) = data_value.as_object() {
+            for (k, v) in map {
+                tera_context.insert(k, v);
+            }
+        } else {
+            return Err(crate::Error::template(
+                "Context must be a JSON object".to_string(),
+            ));
+        }
 
         // Verify template exists
         log::debug!("Checking if template exists: {}", template_name);
@@ -284,6 +294,12 @@ impl TemplateManager {
         // Create output directory
         let output_path = PathBuf::from(&config.output_dir);
         fs::create_dir_all(&output_path).await?;
+        // Build base context with project_name and api_version
+        let mut base_map: Map<String, JsonValue> = Map::new();
+        if let Some(proj_name) = output_path.file_name().and_then(|s| s.to_str()) {
+            base_map.insert("project_name".to_string(), json!(proj_name));
+        }
+        base_map.insert("api_version".to_string(), json!("1.0.0"));
         // Iterate over manifest files
         for file in &self.manifest.files {
             let dest_path = output_path.join(&file.destination);
@@ -310,7 +326,15 @@ impl TemplateManager {
                                     .map(|opts| opts.exclude_operations.contains(&operation_id))
                                     .unwrap_or(false);
                                 if include_operation && !exclude_operation {
-                                    let mut context = file.context.clone();
+                                    // Initialize context with base_map and merge file-specific context
+                                    let mut context = JsonValue::Object(base_map.clone());
+                                    if let Some(file_ctx) = file.context.as_object() {
+                                        if let JsonValue::Object(ref mut obj) = context {
+                                            for (k, v) in file_ctx {
+                                                obj.insert(k.clone(), v.clone());
+                                            }
+                                        }
+                                    }
                                     if let JsonValue::Object(ref mut obj) = context {
                                         obj.insert("operation_id".to_string(), json!(operation_id));
                                         obj.insert("method".to_string(), json!(method.to_uppercase()));
@@ -333,7 +357,15 @@ impl TemplateManager {
                 }
             } else {
                 // Single-file generation
-                let mut context = file.context.clone();
+                // Initialize context with base_map and merge file-specific context
+                let mut context = JsonValue::Object(base_map.clone());
+                if let Some(file_ctx) = file.context.as_object() {
+                    if let JsonValue::Object(ref mut obj) = context {
+                        for (k, v) in file_ctx {
+                            obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
                 if let Some(opts) = &template_opts {
                     if let Some(additional_ctx) = &opts.context {
                         if let (Some(obj), Some(additional_obj)) = (context.as_object_mut(), additional_ctx.as_object()) {

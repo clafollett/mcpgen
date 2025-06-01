@@ -43,45 +43,67 @@ pub struct OpenAPISpec {
 /// Info about a single OpenAPI parameter
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ParameterInfo {
+    /// Name of the parameter as defined in the OpenAPI spec
     pub name: String,
+    /// Corresponding Rust type for the parameter
     pub rust_type: String,
+    /// Optional description of the parameter
     pub description: Option<String>,
+    /// Optional example value for the parameter
     pub example: Option<JsonValue>,
 }
 
 /// Info about a single response property
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PropertyInfo {
+    /// Name of the property as defined in the OpenAPI schema
     pub name: String,
+    /// Corresponding Rust type for the property
     pub rust_type: String,
+    /// Optional title metadata for the property
     pub title: Option<String>,
+    /// Optional description of the property
     pub description: Option<String>,
+    /// Optional example value for the property
     pub example: Option<JsonValue>,
 }
 
 /// Parsed endpoint context for template rendering
-#[allow(missing_docs)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EndpointContext {
+    /// Identifier for the endpoint (path with slashes replaced by '_')
     pub endpoint: String,
+    /// Uppercase form of the endpoint for type names
     pub endpoint_cap: String,
+    /// Name of the generated function for the endpoint
     pub fn_name: String,
+    /// Name of the generated parameters struct (e.g., 'users_params')
     pub parameters_type: String,
+    /// Name of the generated properties struct
     pub properties_type: String,
+    /// Name of the generated response struct
     pub response_type: String,
+    /// Raw JSON object representing the response schema properties
     pub envelope_properties: JsonValue,
+    /// Typed response property information
     pub properties: Vec<PropertyInfo>,
+    /// Names of properties to pass into handler functions
     pub properties_for_handler: Vec<String>,
+    /// Typed list of parameters for the endpoint
     pub parameters: Vec<ParameterInfo>,
-    pub openapi_parameters: Vec<ParameterInfo>,
-    pub common_parameter_names: Vec<String>,
-    pub endpoint_specific_parameters: Vec<String>,
+    /// Summary of the endpoint
     pub summary: String,
+    /// Description of the endpoint
     pub description: String,
+    /// Tags associated with the endpoint
     pub tags: Vec<String>,
+    /// Schema reference for the properties
     pub properties_schema: JsonMap<String, JsonValue>,
+    /// Schema reference for the response
     pub response_schema: JsonValue,
+    /// Name of the spec file (if loaded from a file)
     pub spec_file_name: Option<String>,
+    /// Valid fields for the endpoint
     pub valid_fields: Vec<String>,
 }
 
@@ -169,9 +191,6 @@ impl OpenAPISpec {
                 properties: property_infos.clone(),
                 properties_for_handler: property_infos.iter().map(|p| p.name.clone()).collect(),
                 parameters: param_infos.clone(),
-                openapi_parameters: param_infos.clone(),
-                common_parameter_names: Vec::new(),
-                endpoint_specific_parameters: Vec::new(),
                 summary,
                 description,
                 tags,
