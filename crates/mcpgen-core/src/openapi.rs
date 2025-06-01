@@ -36,7 +36,8 @@ use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::fs;
 
 /// Represents an OpenAPI specification
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
+#[serde(transparent)]
 pub struct OpenAPISpec {
     /// The raw JSON value of the OpenAPI spec
     pub json: JsonValue,

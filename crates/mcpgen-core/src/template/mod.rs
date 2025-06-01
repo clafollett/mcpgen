@@ -177,30 +177,46 @@ impl TemplateManager {
         Ok(())
     }
 
-    /// Discover all template files in a directory recursively (uses spawn_blocking to avoid blocking async runtime)
+    /// Discovers all template files in the given directory and its subdirectories.
+    ///
+    /// This function uses `spawn_blocking` to avoid blocking the async runtime
+    /// during filesystem operations.
+    ///
+    /// # Arguments
+    /// * `dir` - The directory to search for template files
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of paths to template files with the `.tera` extension
     pub async fn discover_template_files(dir: &Path) -> Result<Vec<PathBuf>> {
         let dir_buf = dir.to_path_buf();
-        let templates = task::spawn_blocking(move || -> std::io::Result<Vec<PathBuf>> {
-            fn walk(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-                let mut templates = Vec::new();
+
+        task::spawn_blocking(move || {
+            let mut templates = Vec::new();
+
+            fn walk_dir(dir: &Path, templates: &mut Vec<PathBuf>) -> std::io::Result<()> {
                 for entry in std::fs::read_dir(dir)? {
                     let entry = entry?;
                     let path = entry.path();
+
                     if path.is_dir() {
-                        templates.extend(walk(&path)?);
+                        walk_dir(&path, templates)?;
                     } else if path.extension().and_then(|s| s.to_str()) == Some("tera") {
                         templates.push(path);
                     }
                 }
-                Ok(templates)
+                Ok(())
             }
-            walk(&dir_buf)
+
+            walk_dir(&dir_buf, &mut templates)?;
+            Ok(templates)
         })
         .await
         .map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("Blocking join error: {}", e))
-        })??;
-        Ok(templates)
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to join blocking task: {}", e),
+            )
+        })?
     }
 
     /// Generate a handler file from a template
@@ -344,102 +360,238 @@ impl TemplateManager {
         // Create output directory
         let output_path = PathBuf::from(&config.output_dir);
         fs::create_dir_all(&output_path).await?;
+
+        // Build the context for template rendering
+        let context = self
+            .build_context(spec, &output_path, &template_opts)
+            .await?;
+
+        // Process all template files
+        self.process_template_files(&context, &output_path, &template_opts, spec)
+            .await?;
+
+        // Run post-generation hooks if any
+        self.execute_post_generation_hooks(&output_path).await?;
+
+        Ok(())
+    }
+
+    /// Build the context for template rendering
+    async fn build_context(
+        &self,
+        spec: &OpenAPISpec,
+        output_path: &Path,
+        template_opts: &Option<TemplateOptions>,
+    ) -> Result<Context> {
         // Build base context with project_name and api_version
         let mut base_map: Map<String, JsonValue> = Map::new();
+
+        // Add project name from output directory
         if let Some(proj_name) = output_path.file_name().and_then(|s| s.to_str()) {
             base_map.insert("project_name".to_string(), json!(proj_name));
         }
-        base_map.insert("api_version".to_string(), json!("1.0.0"));
-        // Pre-load endpoint contexts for operation templates
-        let endpoint_contexts = spec.parse_endpoints().await?;
-        // Iterate over manifest files
-        for file in &self.manifest.files {
-            let dest_path = output_path.join(&file.destination);
-            if let Some(parent) = dest_path.parent() {
-                fs::create_dir_all(parent).await?;
+
+        // Add API version from spec
+        if let Some(api_version) = spec.version() {
+            base_map.insert("api_version".to_string(), json!(api_version));
+        }
+
+        // Add template options to context if provided
+        if let Some(opts) = template_opts {
+            if let Some(context) = &opts.context {
+                if let JsonValue::Object(additional) = context {
+                    for (k, v) in additional {
+                        base_map.insert(k.clone(), v.clone());
+                    }
+                }
             }
-            // Per-operation generation using parsed endpoint contexts
+        }
+
+        // Convert to serde_json::Value for Tera
+        let mut context = Context::from_value(JsonValue::Object(base_map))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        // Add the full spec to the context if needed
+        if let Ok(spec_value) = serde_json::to_value(spec) {
+            context.insert("spec", &spec_value);
+        }
+
+        Ok(context)
+    }
+
+    /// Process all template files with the given context
+    async fn process_template_files(
+        &self,
+        base_context: &Context,
+        output_path: &Path,
+        template_opts: &Option<TemplateOptions>,
+        spec: &OpenAPISpec,
+    ) -> Result<()> {
+        // Pre-load endpoint contexts for operation templates if needed
+        let needs_endpoints = self
+            .manifest
+            .files
+            .iter()
+            .any(|f| f.for_each.as_deref() == Some("operation"));
+
+        let endpoint_contexts = if needs_endpoints {
+            spec.parse_endpoints().await?
+        } else {
+            Vec::new()
+        };
+
+        for file in &self.manifest.files {
+            // Handle per-operation generation if specified
             if file.for_each.as_deref() == Some("operation") {
-                for ctx in &endpoint_contexts {
-                    let fn_name = ctx.fn_name.clone();
-                    let include = template_opts
-                        .as_ref()
-                        .map(|opts| {
-                            opts.all_operations
-                                || opts.include_operations.is_empty()
-                                || opts.include_operations.contains(&fn_name)
-                        })
-                        .unwrap_or(true);
-                    let exclude = template_opts
-                        .as_ref()
-                        .map(|opts| opts.exclude_operations.contains(&fn_name))
-                        .unwrap_or(false);
-                    if include && !exclude {
-                        // Merge base map, file-specific, endpoint context, and additional ctx
-                        let mut context_map = base_map.clone();
-                        if let Some(file_ctx) = file.context.as_object() {
-                            for (k, v) in file_ctx {
-                                context_map.insert(k.clone(), v.clone());
-                            }
-                        }
-                        // Insert EndpointContext fields
-                        let ctx_value = serde_json::to_value(ctx).map_err(|e| {
-                            crate::Error::template(format!(
-                                "Failed to serialize endpoint context: {}",
-                                e
-                            ))
-                        })?;
-                        if let Some(fields) = ctx_value.as_object() {
-                            for (k, v) in fields {
-                                context_map.insert(k.clone(), v.clone());
-                            }
-                        }
-                        if let Some(opts) = &template_opts {
-                            if let Some(additional) = &opts.context {
-                                if let Some(add_obj) = additional.as_object() {
-                                    for (k, v) in add_obj {
-                                        context_map.insert(k.clone(), v.clone());
-                                    }
-                                }
-                            }
-                        }
-                        self.generate_with_context(&file.source, &context_map, &dest_path)
-                            .await?;
-                    }
-                }
+                self.process_operation_file(
+                    file,
+                    base_context,
+                    output_path,
+                    &endpoint_contexts,
+                    &template_opts,
+                )
+                .await?;
             } else {
-                // Single-file generation
-                // Initialize context with base_map and merge file-specific context
-                let mut context = JsonValue::Object(base_map.clone());
-                if let Some(file_ctx) = file.context.as_object() {
-                    if let JsonValue::Object(ref mut obj) = context {
-                        for (k, v) in file_ctx {
-                            obj.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-                if let Some(opts) = &template_opts {
-                    if let Some(additional_ctx) = &opts.context {
-                        if let (Some(obj), Some(additional_obj)) =
-                            (context.as_object_mut(), additional_ctx.as_object())
-                        {
-                            for (k, v) in additional_obj {
-                                obj.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                }
-                self.generate_with_context(&file.source, &context, &dest_path)
+                self.process_single_file(file, base_context, output_path)
                     .await?;
             }
         }
-        // Run post-generation hooks if any
+
+        Ok(())
+    }
+
+    /// Process a single template file
+    async fn process_single_file(
+        &self,
+        file: &crate::manifest::TemplateFile,
+        base_context: &Context,
+        output_path: &Path,
+    ) -> Result<()> {
+        let dest_path = output_path.join(&file.destination);
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        // Create file-specific context
+        let file_context = self.create_file_context(base_context, file).await?;
+
+        // Render and write the file
+        self.generate_with_context(&file.source, &file_context, &dest_path)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Process a template file for each operation
+    async fn process_operation_file(
+        &self,
+        file: &crate::manifest::TemplateFile,
+        base_context: &Context,
+        output_path: &Path,
+        endpoint_contexts: &[crate::openapi::EndpointContext],
+        template_opts: &Option<TemplateOptions>,
+    ) -> Result<()> {
+        for ctx in endpoint_contexts {
+            let fn_name = ctx.fn_name.clone();
+            let include = template_opts
+                .as_ref()
+                .map(|opts| {
+                    opts.all_operations
+                        || opts.include_operations.is_empty()
+                        || opts.include_operations.contains(&fn_name)
+                })
+                .unwrap_or(true);
+            let exclude = template_opts
+                .as_ref()
+                .map(|opts| opts.exclude_operations.contains(&fn_name))
+                .unwrap_or(false);
+
+            if include && !exclude {
+                // Create a new context with endpoint-specific data
+                let mut file_context = self.create_file_context(base_context, file).await?;
+
+                // Add endpoint context
+                if let JsonValue::Object(obj) = &mut file_context {
+                    if let Ok(ctx_value) = serde_json::to_value(ctx) {
+                        if let JsonValue::Object(fields) = ctx_value {
+                            for (k, v) in fields {
+                                obj.insert(k, v);
+                            }
+                        }
+                    }
+                }
+
+                // Generate the output path with operation name
+                let dest_path = output_path.join(file.destination.replace("{operation}", &fn_name));
+
+                // Create parent directories if they don't exist
+                if let Some(parent) = dest_path.parent() {
+                    fs::create_dir_all(parent).await?;
+                }
+
+                // Render and write the file
+                self.generate_with_context(&file.source, &file_context, &dest_path)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Create a context for a specific file by merging the base context with file-specific context
+    async fn create_file_context(
+        &self,
+        base_context: &Context,
+        file: &crate::manifest::TemplateFile,
+    ) -> Result<serde_json::Value> {
+        // Convert base context to JSON value
+        let mut context = serde_json::Map::new();
+
+        // Get all values from the Tera context by trying known keys
+        // Note: This is a workaround since tera::Context doesn't provide a way to iterate keys
+        let known_keys = ["project_name", "api_version", "spec"];
+        
+        for key in known_keys.iter() {
+            if let Some(value) = base_context.get(key) {
+                let value_str = value.to_string();
+                context.insert(key.to_string(), JsonValue::String(value_str));
+            }
+        }
+
+        // Add any additional context from template options
+        if let Some(opts) = base_context.get("template_options") {
+            if let Some(obj) = opts.as_object() {
+                for (k, v) in obj {
+                    context.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        // Convert to a proper JSON Value
+        let mut context = serde_json::Value::Object(context);
+
+        // Add file-specific context if provided
+        if let JsonValue::Object(file_ctx) = &file.context {
+            if let Some(context_obj) = context.as_object_mut() {
+                for (k, v) in file_ctx {
+                    context_obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        Ok(context)
+    }
+
+    /// Execute post-generation hooks
+    async fn execute_post_generation_hooks(&self, output_path: &Path) -> Result<()> {
         for hook in &self.manifest.hooks.post_generate {
             match hook.as_str() {
                 "cargo_fmt" => {
                     if let Ok(mut cmd) = std::process::Command::new("cargo")
                         .args(["fmt", "--"])
-                        .current_dir(&output_path)
+                        .current_dir(output_path)
                         .spawn()
                     {
                         let _ = cmd.wait();
