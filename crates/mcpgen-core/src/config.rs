@@ -21,8 +21,11 @@
 //! # }
 //! ```
 
-use serde::{Deserialize, Serialize};
+// Internal imports (std, crate)
 use std::path::Path;
+
+// External imports (alphabetized)
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 /// Configuration for MCP server generation
@@ -49,10 +52,6 @@ pub struct Config {
     /// List of operations to exclude
     #[serde(default)]
     pub exclude_operations: Vec<String>,
-}
-
-fn default_template() -> String {
-    "rust-axum".to_string()
 }
 
 impl Config {
@@ -83,6 +82,10 @@ impl Config {
     }
 }
 
+fn default_template() -> String {
+    "rust-axum".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,15 +95,15 @@ mod tests {
     async fn test_config_roundtrip() -> crate::Result<()> {
         let dir = tempdir()?;
         let file_path = dir.path().join("config.yaml");
-        
+
         let config = Config::new("openapi.json", "output");
         config.save(&file_path).await?;
-        
+
         let loaded = Config::from_file(&file_path).await?;
         assert_eq!(config.openapi_spec, loaded.openapi_spec);
         assert_eq!(config.output_dir, loaded.output_dir);
         assert_eq!(config.template, loaded.template);
-        
+
         Ok(())
     }
 }

@@ -1,13 +1,18 @@
 //! mcpgen CLI entrypoint
 //! Parses command-line arguments and dispatches to the core generator.
 
+// Internal imports (std, crate)
+use std::path::{Path, PathBuf};
+
+// External imports (alphabetized)
 use anyhow::Context;
 use clap::Parser;
-use mcpgen_core::TemplateOptions;
-use mcpgen_core::template::TemplateManager;
-use mcpgen_core::template_kind::Template;
-use mcpgen_core::openapi::OpenAPISpec;
-use std::path::{Path, PathBuf};
+use mcpgen_core::{
+    openapi::OpenAPISpec,
+    template::TemplateManager,
+    template_kind::Template,
+    TemplateOptions,
+};
 use tokio::fs;
 
 #[derive(Parser)]

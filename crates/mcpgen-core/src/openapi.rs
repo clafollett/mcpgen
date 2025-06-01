@@ -25,13 +25,14 @@
 //! # }
 //! ```
 
-use crate::Error;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use serde_json::Map as JsonMap;
-use serde_json::Value as JsonValue;
-use serde_json::json;
+// Internal imports (std, crate)
 use std::path::Path;
+
+use crate::Error;
+
+// External imports (alphabetized)
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::fs;
 
 /// Represents an OpenAPI specification

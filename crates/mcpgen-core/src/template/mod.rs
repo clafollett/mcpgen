@@ -1,20 +1,21 @@
 //! Template system for code generation
 
-use crate::error::Result;
-use serde::Serialize;
+// Internal imports (std, crate)
 use std::io;
 use std::path::{Path, PathBuf};
-use tera::{Context, Tera};
-
-use crate::manifest::TemplateManifest;
-use crate::template_kind::Template;
 
 use crate::TemplateOptions;
 use crate::config::Config;
+use crate::error::Result;
+use crate::manifest::TemplateManifest;
 use crate::openapi::OpenAPISpec;
+use crate::template_kind::Template;
+
+// External imports (alphabetized)
+use serde::Serialize;
 use serde_json::{Map, Value as JsonValue, json};
-use tokio::fs;
-use tokio::task;
+use tera::{Context, Tera};
+use tokio::{fs, task};
 
 /// Manages loading and rendering of code generation templates
 #[derive(Debug)]
@@ -214,6 +215,24 @@ impl TemplateManager {
         output_path: impl AsRef<Path>,
     ) -> Result<()> {
         let output_path = output_path.as_ref();
+
+        // First validate required context variables
+        let context_value = serde_json::to_value(context)
+            .map_err(|e| crate::Error::template(format!("Failed to serialize context: {}", e)))?;
+
+        let context_map = context_value
+            .as_object()
+            .ok_or_else(|| crate::Error::template("Context must be a JSON object".to_string()))?;
+
+        // Define required variables per template type
+        let required_vars: &[&str] = match template_name {
+            // Add template-specific required variables here
+            // Example: "handlers/endpoint.rs" => &["endpoint", "parameters_type"],
+            _ => &[],
+        };
+
+        validate_context(template_name, context_map, required_vars)?;
+
         let parent = output_path.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -228,19 +247,10 @@ impl TemplateManager {
         log::debug!("Output path: {}", output_path.display());
         log::debug!("Parent directory: {}", parent.display());
 
-        // Build Tera Context manually from JSON object
+        // Build Tera Context from the already parsed context_map
         let mut tera_context = Context::new();
-        // Serialize provided context into JSON value
-        let data_value = serde_json::to_value(context)
-            .map_err(|e| crate::Error::template(format!("Failed to serialize context: {}", e)))?;
-        if let Some(map) = data_value.as_object() {
-            for (k, v) in map {
-                tera_context.insert(k, v);
-            }
-        } else {
-            return Err(crate::Error::template(
-                "Context must be a JSON object".to_string(),
-            ));
+        for (k, v) in context_map {
+            tera_context.insert(k, v);
         }
 
         // Verify template exists
@@ -430,14 +440,69 @@ impl TemplateManager {
     }
 }
 
+/// Validates that all required context variables are present
+fn validate_context(
+    template: &str,
+    context: &Map<String, JsonValue>,
+    required_vars: &[&str],
+) -> crate::Result<()> {
+    let mut missing = Vec::new();
+
+    for var in required_vars {
+        if !context.contains_key(*var) {
+            missing.push(var.to_string());
+        }
+    }
+
+    if !missing.is_empty() {
+        return Err(crate::Error::template(format!(
+            "Missing required context variables for template '{}': {}",
+            template,
+            missing.join(", ")
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
     use crate::openapi::OpenAPISpec;
     use crate::template_kind::Template;
-    use serde_json::json;
+    use serde_json::{Map, json};
     use tempfile::TempDir;
+
+    #[test]
+    fn test_validate_context() {
+        let mut context = Map::new();
+        context.insert("foo".to_string(), json!("bar"));
+        context.insert("baz".to_string(), json!(42));
+
+        // Test with no required variables
+        assert!(validate_context("test_template", &context, &[]).is_ok());
+
+        // Test with existing variables
+        assert!(validate_context("test_template", &context, &["foo"]).is_ok());
+        assert!(validate_context("test_template", &context, &["baz"]).is_ok());
+        assert!(validate_context("test_template", &context, &["foo", "baz"]).is_ok());
+
+        // Test with missing variables
+        let result = validate_context("test_template", &context, &["missing"]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required context variables")
+        );
+
+        // Test with some missing variables
+        let result = validate_context("test_template", &context, &["foo", "missing"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing"));
+    }
 
     #[tokio::test]
     async fn test_template_manager() -> Result<()> {

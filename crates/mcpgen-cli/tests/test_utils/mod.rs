@@ -1,8 +1,11 @@
 //! Test utilities for MCPGen integration tests
 
-use anyhow::Context;
+// Internal imports (std, crate)
 use std::fs;
 use std::path::{Path, PathBuf};
+
+// External imports (alphabetized)
+use anyhow::Context;
 use tempfile::TempDir;
 
 /// Creates a temporary directory for test outputs

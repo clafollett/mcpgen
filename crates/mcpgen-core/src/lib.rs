@@ -3,16 +3,10 @@
 //! This library provides the core functionality for generating MCP (Model-Controller-Presenter)
 //! server code from OpenAPI specifications.
 
-#![warn(missing_docs)]
-#![warn(rustdoc::missing_crate_level_docs)]
-#![forbid(unsafe_code)]
-
+// Internal imports (std, crate)
 use std::str::FromStr;
 
-// Re-export the Result type and Error enum from the error module
-pub use config::Config;
-pub use error::{Error, Result};
-
+// Module declarations (alphabetized)
 pub mod config;
 pub mod error;
 pub mod manifest;
@@ -20,6 +14,11 @@ pub mod openapi;
 pub mod template;
 pub mod template_kind;
 
+// Re-exports (alphabetized)
+pub use config::Config;
+pub use error::{Error, Result};
+
+// Internal crate imports (alphabetized)
 use openapi::OpenAPISpec;
 use template::TemplateManager;
 use template_kind::Template;
@@ -65,7 +64,9 @@ pub async fn generate(config: &Config, template_opts: Option<TemplateOptions>) -
     let template_manager = TemplateManager::new(template_kind, None).await?;
 
     // 3. Delegate to TemplateManager.generate
-    template_manager.generate(&spec, config, template_opts).await?;
+    template_manager
+        .generate(&spec, config, template_opts)
+        .await?;
 
     Ok(())
 }

@@ -39,6 +39,7 @@
 //! 4. `/usr/local/share/mcpgen/templates/` for system-wide installation
 //! 5. `./templates/` in the current working directory
 
+// Internal imports (std, crate)
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
