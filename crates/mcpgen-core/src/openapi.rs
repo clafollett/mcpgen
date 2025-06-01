@@ -248,7 +248,10 @@ impl OpenAPISpec {
         if let Some(get_item) = path_item.get("get").and_then(JsonValue::as_object) {
             if let Some(seq) = get_item.get("parameters").and_then(JsonValue::as_array) {
                 // Path parameters first
-                for param in seq.iter().filter(|p| p.get("in").and_then(JsonValue::as_str) == Some("path")) {
+                for param in seq
+                    .iter()
+                    .filter(|p| p.get("in").and_then(JsonValue::as_str) == Some("path"))
+                {
                     if let Some(ref_str) = param.get("$ref").and_then(JsonValue::as_str) {
                         if let Some(resolved) = self.json.pointer(&ref_str[1..]) {
                             parameters.push(resolved.clone());
@@ -258,7 +261,10 @@ impl OpenAPISpec {
                     }
                 }
                 // Query parameters next
-                for param in seq.iter().filter(|p| p.get("in").and_then(JsonValue::as_str) == Some("query")) {
+                for param in seq
+                    .iter()
+                    .filter(|p| p.get("in").and_then(JsonValue::as_str) == Some("query"))
+                {
                     if let Some(ref_str) = param.get("$ref").and_then(JsonValue::as_str) {
                         if let Some(resolved) = self.json.pointer(&ref_str[1..]) {
                             parameters.push(resolved.clone());
@@ -431,12 +437,18 @@ impl OpenAPISpec {
                 // Trim edges and collapse inner whitespace
                 let mut trimmed = ws_re.replace_all(&line.trim(), " ").to_string();
                 // Remove spaces around hyphens
-                trimmed = trimmed.replace(" - ", "-").replace("- ", "-").replace(" -", "-");
+                trimmed = trimmed
+                    .replace(" - ", "-")
+                    .replace("- ", "-")
+                    .replace(" -", "-");
                 // Escape backslashes and quotes
                 let mut safe = trimmed.replace('\\', "\\\\").replace('"', "\\\"");
                 // Escape braces and brackets
-                safe = safe.replace("{", "&#123;").replace("}", "&#125;")
-                           .replace("[", "&#91;").replace("]", "&#93;");
+                safe = safe
+                    .replace("{", "&#123;")
+                    .replace("}", "&#125;")
+                    .replace("[", "&#91;")
+                    .replace("]", "&#93;");
                 safe
             })
             .filter(|l| !l.is_empty())

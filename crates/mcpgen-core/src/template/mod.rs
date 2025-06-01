@@ -9,12 +9,12 @@ use tera::{Context, Tera};
 use crate::manifest::TemplateManifest;
 use crate::template_kind::Template;
 
-use tokio::task;
+use crate::TemplateOptions;
 use crate::config::Config;
 use crate::openapi::OpenAPISpec;
-use crate::TemplateOptions;
-use serde_json::{Value as JsonValue, json, Map};
+use serde_json::{Map, Value as JsonValue, json};
 use tokio::fs;
+use tokio::task;
 
 /// Manages loading and rendering of code generation templates
 #[derive(Debug)]
@@ -41,7 +41,8 @@ impl TemplateManager {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("Template directory not found: {}", dir.display()),
-                ).into());
+                )
+                .into());
             }
             tokio::fs::canonicalize(&dir)
                 .await
@@ -110,44 +111,61 @@ impl TemplateManager {
         // Create a new Tera instance with lenient parsing
         let mut tera = Tera::default();
         tera.autoescape_on(vec![]);
-        
+
         // Find all .tera files in the template directory
         let template_files = Self::discover_template_files(&self.template_dir).await?;
 
         // Add each template to Tera with its relative path as the name
         for template_path in template_files {
             // Get the relative path from the template directory
-            let relative_path = template_path.strip_prefix(&self.template_dir).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Failed to get relative path for template {}: {}", template_path.display(), e),
-                )
-            })?;
-            
+            let relative_path = template_path
+                .strip_prefix(&self.template_dir)
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "Failed to get relative path for template {}: {}",
+                            template_path.display(),
+                            e
+                        ),
+                    )
+                })?;
+
             // Convert Windows backslashes to forward slashes for consistency
             let template_name = relative_path.to_string_lossy().replace('\\', "/");
 
             log::debug!("Loading template: {}", template_name);
-            
+
             // Read the template content
-            let template_content = tokio::fs::read_to_string(&template_path).await.map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to read template file {}: {}", template_path.display(), e),
-                )
-            })?;
-            
+            let template_content =
+                tokio::fs::read_to_string(&template_path)
+                    .await
+                    .map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!(
+                                "Failed to read template file {}: {}",
+                                template_path.display(),
+                                e
+                            ),
+                        )
+                    })?;
+
             // Add the template with lenient parsing
-            tera.add_raw_template(&template_name, &template_content).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to parse template {}: {}", template_name, e),
-                )
-            })?;
+            tera.add_raw_template(&template_name, &template_content)
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Failed to parse template {}: {}", template_name, e),
+                    )
+                })?;
         }
 
         self.tera = tera;
-        log::debug!("Loaded templates: {:?}", self.tera.get_template_names().collect::<Vec<_>>());
+        log::debug!(
+            "Loaded templates: {:?}",
+            self.tera.get_template_names().collect::<Vec<_>>()
+        );
         Ok(())
     }
 
@@ -204,12 +222,12 @@ impl TemplateManager {
         })?;
 
         tokio::fs::create_dir_all(parent).await?;
-        
+
         // Log the template being rendered
         log::debug!("Rendering template: {}", template_name);
         log::debug!("Output path: {}", output_path.display());
         log::debug!("Parent directory: {}", parent.display());
-        
+
         // Build Tera Context manually from JSON object
         let mut tera_context = Context::new();
         // Serialize provided context into JSON value
@@ -227,22 +245,27 @@ impl TemplateManager {
 
         // Verify template exists
         log::debug!("Checking if template exists: {}", template_name);
-        self.tera.get_template(template_name)
-            .map_err(|e| crate::Error::template(format!("Template not found: {} - {}", template_name, e)))?;
-            
+        self.tera.get_template(template_name).map_err(|e| {
+            crate::Error::template(format!("Template not found: {} - {}", template_name, e))
+        })?;
+
         log::debug!("Found template: {}", template_name);
-        log::debug!("Available templates: {:?}", self.tera.get_template_names().collect::<Vec<_>>());
+        log::debug!(
+            "Available templates: {:?}",
+            self.tera.get_template_names().collect::<Vec<_>>()
+        );
 
         // Render the template with detailed error reporting
         let content = match self.tera.render(template_name, &tera_context) {
             Ok(content) => content,
             Err(e) => {
                 // Get the template source for better error reporting
-                let template_source = match std::fs::read_to_string(self.template_dir.join(template_name)) {
-                    Ok(source) => source,
-                    Err(_) => "<unable to read template file>".to_string()
-                };
-                
+                let template_source =
+                    match std::fs::read_to_string(self.template_dir.join(template_name)) {
+                        Ok(source) => source,
+                        Err(_) => "<unable to read template file>".to_string(),
+                    };
+
                 return Err(crate::Error::template(format!(
                     "Failed to render template '{}': {}\nTemplate source:\n{}",
                     template_name, e, template_source
@@ -250,10 +273,15 @@ impl TemplateManager {
             }
         };
 
-        log::debug!("Rendered content for {} ({} bytes):\n{}", 
-            template_name, 
+        log::debug!(
+            "Rendered content for {} ({} bytes):\n{}",
+            template_name,
             content.len(),
-            if content.len() > 200 { format!("{}... (truncated)", &content[..200]) } else { content.clone() }
+            if content.len() > 200 {
+                format!("{}... (truncated)", &content[..200])
+            } else {
+                content.clone()
+            }
         );
 
         // Ensure the parent directory exists
@@ -300,59 +328,61 @@ impl TemplateManager {
             base_map.insert("project_name".to_string(), json!(proj_name));
         }
         base_map.insert("api_version".to_string(), json!("1.0.0"));
+        // Pre-load endpoint contexts for operation templates
+        let endpoint_contexts = spec.parse_endpoints().await?;
         // Iterate over manifest files
         for file in &self.manifest.files {
             let dest_path = output_path.join(&file.destination);
             if let Some(parent) = dest_path.parent() {
                 fs::create_dir_all(parent).await?;
             }
-            // Per-operation generation
+            // Per-operation generation using parsed endpoint contexts
             if file.for_each.as_deref() == Some("operation") {
-                if let Some(paths) = spec.as_json().get("paths").and_then(JsonValue::as_object) {
-                    for (path, methods) in paths {
-                        if let Some(methods_obj) = methods.as_object() {
-                            for (method, details) in methods_obj {
-                                let operation_id = details
-                                    .get("operationId")
-                                    .and_then(JsonValue::as_str)
-                                    .map(ToString::to_string)
-                                    .unwrap_or_else(|| format!("{}_{}", method.to_lowercase(), path.replace('/', "_")));
-                                let include_operation = template_opts
-                                    .as_ref()
-                                    .map(|opts| opts.all_operations || opts.include_operations.is_empty() || opts.include_operations.contains(&operation_id))
-                                    .unwrap_or(true);
-                                let exclude_operation = template_opts
-                                    .as_ref()
-                                    .map(|opts| opts.exclude_operations.contains(&operation_id))
-                                    .unwrap_or(false);
-                                if include_operation && !exclude_operation {
-                                    // Initialize context with base_map and merge file-specific context
-                                    let mut context = JsonValue::Object(base_map.clone());
-                                    if let Some(file_ctx) = file.context.as_object() {
-                                        if let JsonValue::Object(ref mut obj) = context {
-                                            for (k, v) in file_ctx {
-                                                obj.insert(k.clone(), v.clone());
-                                            }
-                                        }
+                for ctx in &endpoint_contexts {
+                    let fn_name = ctx.fn_name.clone();
+                    let include = template_opts
+                        .as_ref()
+                        .map(|opts| {
+                            opts.all_operations
+                                || opts.include_operations.is_empty()
+                                || opts.include_operations.contains(&fn_name)
+                        })
+                        .unwrap_or(true);
+                    let exclude = template_opts
+                        .as_ref()
+                        .map(|opts| opts.exclude_operations.contains(&fn_name))
+                        .unwrap_or(false);
+                    if include && !exclude {
+                        // Merge base map, file-specific, endpoint context, and additional ctx
+                        let mut context_map = base_map.clone();
+                        if let Some(file_ctx) = file.context.as_object() {
+                            for (k, v) in file_ctx {
+                                context_map.insert(k.clone(), v.clone());
+                            }
+                        }
+                        // Insert EndpointContext fields
+                        let ctx_value = serde_json::to_value(ctx).map_err(|e| {
+                            crate::Error::template(format!(
+                                "Failed to serialize endpoint context: {}",
+                                e
+                            ))
+                        })?;
+                        if let Some(fields) = ctx_value.as_object() {
+                            for (k, v) in fields {
+                                context_map.insert(k.clone(), v.clone());
+                            }
+                        }
+                        if let Some(opts) = &template_opts {
+                            if let Some(additional) = &opts.context {
+                                if let Some(add_obj) = additional.as_object() {
+                                    for (k, v) in add_obj {
+                                        context_map.insert(k.clone(), v.clone());
                                     }
-                                    if let JsonValue::Object(ref mut obj) = context {
-                                        obj.insert("operation_id".to_string(), json!(operation_id));
-                                        obj.insert("method".to_string(), json!(method.to_uppercase()));
-                                        obj.insert("path".to_string(), json!(path));
-                                        if let Some(opts) = &template_opts {
-                                            if let Some(additional_ctx) = &opts.context {
-                                                if let Some(additional_obj) = additional_ctx.as_object() {
-                                                    for (k, v) in additional_obj {
-                                                        obj.insert(k.clone(), v.clone());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    self.generate_with_context(&file.source, &context, &dest_path).await?;
                                 }
                             }
                         }
+                        self.generate_with_context(&file.source, &context_map, &dest_path)
+                            .await?;
                     }
                 }
             } else {
@@ -368,21 +398,28 @@ impl TemplateManager {
                 }
                 if let Some(opts) = &template_opts {
                     if let Some(additional_ctx) = &opts.context {
-                        if let (Some(obj), Some(additional_obj)) = (context.as_object_mut(), additional_ctx.as_object()) {
+                        if let (Some(obj), Some(additional_obj)) =
+                            (context.as_object_mut(), additional_ctx.as_object())
+                        {
                             for (k, v) in additional_obj {
                                 obj.insert(k.clone(), v.clone());
                             }
                         }
                     }
                 }
-                self.generate_with_context(&file.source, &context, &dest_path).await?;
+                self.generate_with_context(&file.source, &context, &dest_path)
+                    .await?;
             }
         }
         // Post-generation hook
         if let Some(ref hook) = self.manifest.hooks.post_generate {
             match hook.as_str() {
                 "cargo_fmt" => {
-                    if let Ok(mut cmd) = std::process::Command::new("cargo").args(["fmt", "--"]).current_dir(&output_path).spawn() {
+                    if let Ok(mut cmd) = std::process::Command::new("cargo")
+                        .args(["fmt", "--"])
+                        .current_dir(&output_path)
+                        .spawn()
+                    {
                         let _ = cmd.wait();
                     }
                 }
@@ -396,9 +433,9 @@ impl TemplateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::template_kind::Template;
     use crate::config::Config;
     use crate::openapi::OpenAPISpec;
+    use crate::template_kind::Template;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -509,7 +546,9 @@ mod tests {
         let td = temp.path();
         // Write a simple template file
         let tera_content = "Message: {{message}}";
-        tokio::fs::write(td.join("foo.tera"), tera_content).await.unwrap();
+        tokio::fs::write(td.join("foo.tera"), tera_content)
+            .await
+            .unwrap();
         // Write the manifest.yaml
         let manifest = r#"
 name: test-template
@@ -522,24 +561,27 @@ files:
     context:
       message: hello
 "#;
-        tokio::fs::write(td.join("manifest.yaml"), manifest).await.unwrap();
+        tokio::fs::write(td.join("manifest.yaml"), manifest)
+            .await
+            .unwrap();
         // Create a minimal OpenAPI spec file
         let spec_json = json!({"paths": {}});
         let spec_file = td.join("spec.json");
-        tokio::fs::write(&spec_file, spec_json.to_string()).await.unwrap();
+        tokio::fs::write(&spec_file, spec_json.to_string())
+            .await
+            .unwrap();
         // Prepare config pointing to output directory
         let out_dir = temp.path().join("out");
-        let config = Config::new(
-            spec_file.to_str().unwrap(),
-            out_dir.to_str().unwrap(),
-        );
+        let config = Config::new(spec_file.to_str().unwrap(), out_dir.to_str().unwrap());
         // Initialize TemplateManager with our temp dir
         let manager = TemplateManager::new(Template::RustAxum, Some(td.to_path_buf())).await?;
         // Load spec and generate
         let spec = OpenAPISpec::from_file(&spec_file).await?;
         manager.generate(&spec, &config, None).await?;
         // Read and verify the generated file
-        let result = tokio::fs::read_to_string(out_dir.join("foo.txt")).await.unwrap();
+        let result = tokio::fs::read_to_string(out_dir.join("foo.txt"))
+            .await
+            .unwrap();
         assert_eq!(result.trim(), "Message: hello");
         Ok(())
     }
