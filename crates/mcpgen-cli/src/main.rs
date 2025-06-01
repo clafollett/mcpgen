@@ -8,10 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::Parser;
 use mcpgen_core::{
-    openapi::OpenAPISpec,
-    template::TemplateManager,
-    template_kind::Template,
-    TemplateOptions,
+    TemplateOptions, openapi::OpenAPISpec, template::TemplateManager, template_kind::Template,
 };
 use tokio::fs;
 
@@ -91,12 +88,17 @@ async fn main() -> anyhow::Result<()> {
                 let workspace_root = Path::new(manifest_dir)
                     .parent()
                     .and_then(Path::parent)
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "Failed to determine workspace root from CARGO_MANIFEST_DIR"
-                    ))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Failed to determine workspace root from CARGO_MANIFEST_DIR"
+                        )
+                    })?;
                 let templates_dir = workspace_root.join("templates");
                 let built_in_dir = templates_dir.join(template_kind.as_str());
-                println!("DEBUG - Full template directory: {}", built_in_dir.display());
+                println!(
+                    "DEBUG - Full template directory: {}",
+                    built_in_dir.display()
+                );
                 built_in_dir
             };
 
@@ -107,16 +109,17 @@ async fn main() -> anyhow::Result<()> {
                 fs::create_dir_all(&template_dir_path)
                     .await
                     .context("Failed to create template directory")?;
-                println!("Created template directory at: {}", template_dir_path.display());
+                println!(
+                    "Created template directory at: {}",
+                    template_dir_path.display()
+                );
             }
 
             // Initialize the template manager using the resolved template directory
-            let template_manager = TemplateManager::new(
-                template_kind,
-                Some(template_dir_path.clone()),
-            )
-            .await
-            .context("Failed to initialize template manager")?;
+            let template_manager =
+                TemplateManager::new(template_kind, Some(template_dir_path.clone()))
+                    .await
+                    .context("Failed to initialize template manager")?;
 
             // List available templates for debugging
             println!("Available templates:");
@@ -134,9 +137,9 @@ async fn main() -> anyhow::Result<()> {
             fs::create_dir_all(&output)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to create output directory: {}", e))?;
-            
+
             // Create directories for all template file destinations
-            for file in &template_manager.manifest.files {
+            for file in &template_manager.manifest().files {
                 if let Some(parent) = Path::new(&file.destination).parent() {
                     let dir = output.join(parent);
                     if !dir.exists() {

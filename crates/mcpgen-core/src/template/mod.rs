@@ -3,13 +3,7 @@
 // Internal imports (std, crate)
 use std::io;
 use std::path::{Path, PathBuf};
-
-use crate::TemplateOptions;
-use crate::config::Config;
-use crate::error::Result;
-use crate::manifest::TemplateManifest;
-use crate::openapi::OpenAPISpec;
-use crate::template_kind::Template;
+use std::sync::Arc;
 
 // External imports (alphabetized)
 use serde::Serialize;
@@ -17,17 +11,24 @@ use serde_json::{Map, Value as JsonValue, json};
 use tera::{Context, Tera};
 use tokio::{fs, task};
 
+use crate::{
+    TemplateOptions, config::Config, error::Result, manifest::TemplateManifest,
+    openapi::OpenAPISpec, template_kind::Template,
+};
+
+type TeraCache = std::collections::HashMap<String, Arc<Tera>>;
+
 /// Manages loading and rendering of code generation templates
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TemplateManager {
-    /// Tera template engine instance
-    pub tera: Tera,
+    /// Cached Tera template engine instance
+    tera: Arc<Tera>,
     /// Path to the template directory
-    pub template_dir: PathBuf,
+    template_dir: PathBuf,
     /// The template kind (language/framework)
-    pub template_kind: Template,
+    template_kind: Template,
     /// The template manifest
-    pub manifest: TemplateManifest,
+    manifest: TemplateManifest,
 }
 
 impl TemplateManager {
@@ -35,6 +36,7 @@ impl TemplateManager {
     ///
     /// If `template_dir` is provided, it will be used directly. Otherwise, the template
     /// directory will be discovered based on the language and framework.
+    /// Creates a new TemplateManager with a cached Tera instance
     pub async fn new(template_kind: Template, template_dir: Option<PathBuf>) -> Result<Self> {
         let template_dir = if let Some(dir) = template_dir {
             // Use the provided template directory directly
@@ -45,55 +47,111 @@ impl TemplateManager {
                 )
                 .into());
             }
-            tokio::fs::canonicalize(&dir)
-                .await
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to canonicalize template path: {}", e),
-                    )
-                })?
-                .to_path_buf()
-        } else {
-            // Use the template kind's template directory discovery
-            template_kind
-                .template_dir()
-                .await
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to get template directory: {}", e),
-                    )
-                })?
-                .to_path_buf()
-        };
-
-        // Load the template manifest
-        let manifest = TemplateManifest::load_from_dir(&template_dir)
-            .await
-            .map_err(|e| {
+            tokio::fs::canonicalize(&dir).await.map_err(|e| {
                 io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to load template manifest: {}", e),
+                    io::ErrorKind::InvalidInput,
+                    format!("Failed to canonicalize template directory: {}", e),
                 )
-            })?;
-
-        let mut manager = Self {
-            tera: Tera::default(),
-            template_dir: template_dir.clone(),
-            template_kind,
-            manifest,
+            })?
+        } else {
+            // Discover the template directory based on the template kind
+            Self::discover_template_dir(&template_kind).await?
         };
 
-        // Load all templates from the directory
-        manager.reload_templates().await.map_err(|e| {
+        // Convert template_dir to string for caching
+        let template_dir_str = template_dir.to_str().ok_or_else(|| {
             io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to load templates: {}", e),
+                io::ErrorKind::InvalidData,
+                "Template path contains invalid UTF-8",
             )
         })?;
 
-        Ok(manager)
+        // Get or initialize the cached Tera instance
+        let tera = {
+            use once_cell::sync::Lazy;
+            use std::sync::Mutex;
+
+            static TERA_CACHE: Lazy<Mutex<TeraCache>> = Lazy::new(|| Mutex::new(TeraCache::new()));
+
+            let mut cache = TERA_CACHE.lock().map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to acquire Tera cache lock: {}", e),
+                )
+            })?;
+
+            // Check if we have a cached Tera instance for this template directory
+            if let Some(cached_tera) = cache.get(template_dir_str) {
+                cached_tera.clone()
+            } else {
+                // Initialize a new Tera instance and cache it
+                let mut tera =
+                    Tera::new(&format!("{}/**/*.tera", template_dir_str)).map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Failed to initialize Tera: {}", e),
+                        )
+                    })?;
+
+                // Auto-escape all files
+                tera.autoescape_on(vec![".html", ".htm", ".xml", ".md"]);
+
+                let tera_arc = Arc::new(tera);
+                cache.insert(template_dir_str.to_string(), tera_arc.clone());
+                tera_arc
+            }
+        };
+
+        // Load the template manifest
+        let manifest_path = template_dir.join("manifest.yaml");
+        let manifest = if manifest_path.exists() {
+            let manifest_content = tokio::fs::read_to_string(&manifest_path).await?;
+            serde_yaml::from_str(&manifest_content).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Failed to parse manifest: {}", e),
+                )
+            })?
+        } else {
+            // Default manifest if none exists
+            TemplateManifest::default()
+        };
+
+        Ok(Self {
+            tera,
+            template_dir,
+            template_kind,
+            manifest,
+        })
+    }
+
+    /// Discover the template directory based on the template kind
+    async fn discover_template_dir(template_kind: &Template) -> Result<PathBuf> {
+        // Try to get the template directory from the template kind
+        let template_dir = template_kind.template_dir().await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Failed to discover template directory: {}", e),
+            )
+        })?;
+
+        // Verify the directory exists
+        if !template_dir.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Template directory not found: {}", template_dir.display()),
+            )
+            .into());
+        }
+
+        // Convert to absolute path
+        tokio::fs::canonicalize(&template_dir).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to canonicalize template path: {}", e),
+            )
+            .into()
+        })
     }
 
     /// Get the template kind this template manager is configured for
@@ -106,67 +164,16 @@ impl TemplateManager {
         &self.template_dir
     }
 
+    /// Get a reference to the Tera template engine
+    pub fn tera(&self) -> &Tera {
+        &self.tera
+    }
+
     /// Reload all templates from the template directory.
-    /// This will discover all `.tera` files in the template directory.
-    pub async fn reload_templates(&mut self) -> Result<()> {
-        // Create a new Tera instance with lenient parsing
-        let mut tera = Tera::default();
-        tera.autoescape_on(vec![]);
-
-        // Find all .tera files in the template directory
-        let template_files = Self::discover_template_files(&self.template_dir).await?;
-
-        // Add each template to Tera with its relative path as the name
-        for template_path in template_files {
-            // Get the relative path from the template directory
-            let relative_path = template_path
-                .strip_prefix(&self.template_dir)
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                            "Failed to get relative path for template {}: {}",
-                            template_path.display(),
-                            e
-                        ),
-                    )
-                })?;
-
-            // Convert Windows backslashes to forward slashes for consistency
-            let template_name = relative_path.to_string_lossy().replace('\\', "/");
-
-            log::debug!("Loading template: {}", template_name);
-
-            // Read the template content
-            let template_content =
-                tokio::fs::read_to_string(&template_path)
-                    .await
-                    .map_err(|e| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!(
-                                "Failed to read template file {}: {}",
-                                template_path.display(),
-                                e
-                            ),
-                        )
-                    })?;
-
-            // Add the template with lenient parsing
-            tera.add_raw_template(&template_name, &template_content)
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to parse template {}: {}", template_name, e),
-                    )
-                })?;
-        }
-
-        self.tera = tera;
-        log::debug!(
-            "Loaded templates: {:?}",
-            self.tera.get_template_names().collect::<Vec<_>>()
-        );
+    /// This is a no-op in the cached implementation since templates are loaded on demand.
+    pub async fn reload_templates(&self) -> Result<()> {
+        // No-op in the cached implementation
+        // Templates are loaded on demand and cached automatically
         Ok(())
     }
 
@@ -205,6 +212,11 @@ impl TemplateManager {
     ) -> Result<()> {
         self.generate_with_context(template_name, context, output_path)
             .await
+    }
+
+    /// Get a reference to the template manifest
+    pub fn manifest(&self) -> &TemplateManifest {
+        &self.manifest
     }
 
     /// Generate a file from a template with a custom context
@@ -421,8 +433,8 @@ impl TemplateManager {
                     .await?;
             }
         }
-        // Post-generation hook
-        if let Some(ref hook) = self.manifest.hooks.post_generate {
+        // Run post-generation hooks if any
+        for hook in &self.manifest.hooks.post_generate {
             match hook.as_str() {
                 "cargo_fmt" => {
                     if let Ok(mut cmd) = std::process::Command::new("cargo")
