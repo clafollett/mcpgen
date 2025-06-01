@@ -32,14 +32,22 @@ impl TemplateManager {
     pub async fn new(template_kind: Template, template_dir: Option<PathBuf>) -> Result<Self> {
         let template_dir = if let Some(dir) = template_dir {
             // If a template directory was provided, use it directly
-            if !dir.exists() {
+            let template_dir = if template_kind == Template::Custom {
+                // For custom templates, use the provided directory as-is
+                dir
+            } else {
+                // For built-in templates, append the template kind to the provided directory
+                dir.join(template_kind.as_str())
+            };
+            
+            if !template_dir.exists() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("Provided template directory not found: {}", dir.display()),
-                )
-                .into());
+                    format!("Template directory not found: {}", template_dir.display()),
+                ).into());
             }
-            tokio::fs::canonicalize(dir)
+            
+            tokio::fs::canonicalize(&template_dir)
                 .await
                 .map_err(|e| {
                     io::Error::new(
@@ -103,36 +111,46 @@ impl TemplateManager {
     /// Reload all templates from the template directory.
     /// This will discover all `.tera` files in the template directory.
     pub async fn reload_templates(&mut self) -> Result<()> {
-        self.tera = Tera::default();
-
+        // Create a new Tera instance with lenient parsing
+        let mut tera = Tera::default();
+        tera.autoescape_on(vec![]);
+        
         // Find all .tera files in the template directory
         let template_files = Self::discover_template_files(&self.template_dir).await?;
 
         // Add each template to Tera with its relative path as the name
         for template_path in template_files {
-            let template_name = template_path
-                .strip_prefix(&self.template_dir)
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("Failed to get relative template path: {}", e),
-                    )
-                })?
-                .to_string_lossy()
-                .replace('\\', "/")
-                .trim_start_matches('/')
-                .to_string();
-
-            log::debug!("Loading template: {} from {}", template_name, template_path.display());
+            // Get the relative path from the template directory
+            let relative_path = template_path.strip_prefix(&self.template_dir).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Failed to get relative path for template {}: {}", template_path.display(), e),
+                )
+            })?;
             
-            self.tera
-                .add_template_file(&template_path, Some(&template_name))
-                .map_err(|e| io::Error::new(
-                    io::ErrorKind::Other, 
-                    format!("Failed to add template {}: {}", template_name, e)
-                ))?;
+            // Convert Windows backslashes to forward slashes for consistency
+            let template_name = relative_path.to_string_lossy().replace('\\', "/");
+
+            log::debug!("Loading template: {}", template_name);
+            
+            // Read the template content
+            let template_content = tokio::fs::read_to_string(&template_path).await.map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to read template file {}: {}", template_path.display(), e),
+                )
+            })?;
+            
+            // Add the template with lenient parsing
+            tera.add_raw_template(&template_name, &template_content).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to parse template {}: {}", template_name, e),
+                )
+            })?;
         }
 
+        self.tera = tera;
         log::debug!("Loaded templates: {:?}", self.tera.get_template_names().collect::<Vec<_>>());
         Ok(())
     }
@@ -193,16 +211,21 @@ impl TemplateManager {
 
         // Log the template being rendered
         log::debug!("Rendering template: {}", template_name);
+        log::debug!("Output path: {}", output_path.display());
+        log::debug!("Parent directory: {}", parent.display());
         
         // Convert the context to a Tera Context
+        log::debug!("Creating Tera context...");
         let tera_context = Context::from_serialize(context)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to create Tera context: {}", e)))?;
+            .map_err(|e| crate::Error::template(format!("Failed to create Tera context: {}", e)))?;
 
         // Verify template exists
+        log::debug!("Checking if template exists: {}", template_name);
         self.tera.get_template(template_name)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Template not found: {} - {}", template_name, e)))?;
+            .map_err(|e| crate::Error::template(format!("Template not found: {} - {}", template_name, e)))?;
             
         log::debug!("Found template: {}", template_name);
+        log::debug!("Available templates: {:?}", self.tera.get_template_names().collect::<Vec<_>>());
 
         // Render the template with detailed error reporting
         let content = match self.tera.render(template_name, &tera_context) {
@@ -228,22 +251,15 @@ impl TemplateManager {
         );
 
         // Ensure the parent directory exists
-        if let Some(parent) = output_path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to create directory {}: {}", parent.display(), e)
-                )
-            })?;
+        log::debug!("Ensuring parent directory exists: {}", parent.display());
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            log::error!("Failed to create directory: {}", e);
+            return Err(crate::Error::Io(e));
         }
 
         // Write the output file
-        tokio::fs::write(&output_path, &content).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to write to {}: {}", output_path.display(), e)
-            )
-        })?;
+        log::debug!("Writing to output file: {}", output_path.display());
+        tokio::fs::write(&output_path, &content).await?;
 
         log::debug!("Successfully wrote template to: {}", output_path.display());
         Ok(())
@@ -313,7 +329,7 @@ mod tests {
           - source: handler.rs.tera
             destination: handler.rs
         "#;
-        tokio::fs::write(template_dir.join("template.yaml"), manifest_content)
+        tokio::fs::write(template_dir.join("manifest.yaml"), manifest_content)
             .await
             .map_err(|e| {
                 io::Error::new(

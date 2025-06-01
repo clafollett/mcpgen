@@ -21,7 +21,7 @@ pub struct {{ parameters_type }} {
     #[schemars(description = r#"{{ p.description }}"#)]
     {%- endif %}
     pub {{ p.name }}: Option<{{ p.rust_type }}>,
-    {%- endif %}{% endfor %}
+    {% endfor %}
 }
 
 // Implement Endpoint for generic handler

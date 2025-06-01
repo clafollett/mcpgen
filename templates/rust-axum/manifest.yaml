@@ -1,12 +1,23 @@
 # Template manifest for rust-axum server
+name: rust-axum
 description: A Rust server using the Axum web framework
-template_files:
-  - Cargo.toml.tera
-  - common.rs.tera
-  - handler.rs.tera
-  - handlers_mod.rs.tera
-  - main.rs.tera
+version: "0.1.0"
+language: rust
 
+# List of files to generate
+files:
+  - source: Cargo.toml.tera
+    destination: Cargo.toml
+  - source: common.rs.tera
+    destination: src/common.rs
+  - source: handler.rs.tera
+    destination: src/handlers/mod.rs
+  - source: handlers_mod.rs.tera
+    destination: src/handlers/mod.rs
+  - source: main.rs.tera
+    destination: src/main.rs
+
+# Template variables that will be available during code generation
 template_variables:
   project_name:
     description: Name of the project
@@ -18,6 +29,12 @@ template_variables:
     default: "1.0.0"
     type: string
 
+# Directories that should be created before generating files
 required_directories:
   - src
   - src/handlers
+
+# Hooks that run before/after generation (optional)
+hooks:
+  # pre_generate: "echo 'Running pre-generation tasks...'"
+  # post_generate: "cargo fmt"

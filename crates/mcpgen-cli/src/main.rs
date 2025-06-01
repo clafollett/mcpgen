@@ -82,19 +82,23 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| PathBuf::from("./templates"))
             } else {
                 // For built-in templates, use the workspace templates directory
-                let template_dir = env!("CARGO_MANIFEST_DIR");
-                let manifest_dir = PathBuf::from(template_dir);
-
+                let manifest_dir = env!("CARGO_MANIFEST_DIR");
+                println!("DEBUG - CARGO_MANIFEST_DIR: {}", manifest_dir);
+                
                 // Go up to the workspace root (from crates/mcpgen-cli -> mcpgen)
-                manifest_dir
+                let workspace_root = Path::new(manifest_dir)
                     .parent() // crates
                     .and_then(Path::parent) // workspace root
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Failed to determine workspace root from CARGO_MANIFEST_DIR"
                         )
-                    })?
-                    .join("templates")
+                    })?;
+                
+                let templates_dir = workspace_root.join("templates");
+                let template_dir = templates_dir.join(template_kind.as_str());
+                println!("DEBUG - Full template directory: {}", template_dir.display());
+                template_dir
             };
 
             println!("Using template directory: {}", template_dir_path.display());
@@ -110,11 +114,16 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
 
-            // Initialize template manager with the specified template
+            // For built-in templates, we need to pass the parent directory of the template
+            // (e.g., /path/to/templates instead of /path/to/templates/rust-axum)
             let template_manager = if template_kind == Template::Custom {
                 TemplateManager::new(template_kind, Some(template_dir_path)).await
             } else {
-                TemplateManager::new(template_kind, None).await
+                let parent_dir = template_dir_path.parent().ok_or_else(|| {
+                    anyhow::anyhow!("Failed to get parent directory of template path")
+                })?;
+                println!("DEBUG - Using template base directory: {}", parent_dir.display());
+                TemplateManager::new(template_kind, Some(parent_dir.to_path_buf())).await
             }
             .context("Failed to initialize template manager")?;
 
@@ -129,10 +138,24 @@ async fn main() -> anyhow::Result<()> {
                 template_manager.template_dir().display()
             );
 
-            // Ensure output directory exists
+            // Ensure output directory and all required subdirectories exist
+            println!("Creating output directory: {}", output.display());
             fs::create_dir_all(&output)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to create output directory: {}", e))?;
+            
+            // Create directories for all template file destinations
+            for file in &template_manager.manifest.files {
+                if let Some(parent) = Path::new(&file.destination).parent() {
+                    let dir = output.join(parent);
+                    if !dir.exists() {
+                        println!("Creating directory: {}", dir.display());
+                        fs::create_dir_all(&dir).await.map_err(|e| {
+                            anyhow::anyhow!("Failed to create directory {}: {}", dir.display(), e)
+                        })?;
+                    }
+                }
+            }
 
             // Create template options with default values
             let template_opts = TemplateOptions {

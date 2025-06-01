@@ -18,7 +18,8 @@
                 "--output",
                 "${workspaceFolder}/tests/integration_test_output"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "rust: cargo build"
         }
     ]
 }

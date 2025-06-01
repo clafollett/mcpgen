@@ -7,6 +7,7 @@
 #![warn(rustdoc::missing_crate_level_docs)]
 #![forbid(unsafe_code)]
 
+use std::io;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::fs;
@@ -77,10 +78,8 @@ pub async fn generate_with_template_manager(
     for file in &template_manager.manifest.files {
         let dest_path = output_path.join(&file.destination);
         
-        // Create parent directories if they don't exist
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
+        // Parent directories will be created by generate_with_context
+        log::debug!("Preparing to generate file: {}", dest_path.display());
         
         // All source files must be Tera templates
         if !file.source.ends_with(".tera") {
@@ -96,6 +95,17 @@ pub async fn generate_with_template_manager(
             .replace('\\', "/")
             .trim_start_matches("./")
             .to_string();
+            
+        log::debug!("Looking for template: {}", template_name);
+        
+        // Verify the template exists
+        if !template_manager.has_template(&template_name) {
+            return Err(Error::Template(format!(
+                "Template '{}' not found. Available templates: {}",
+                template_name,
+                template_manager.list_templates().join(", ")
+            )));
+        }
         
         // Create a basic context with project name (extracted from output_dir)
         let project_name = config.output_dir

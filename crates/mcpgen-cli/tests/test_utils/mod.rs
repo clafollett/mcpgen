@@ -241,7 +241,7 @@ pub fn create_test_template_dir(dir: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(&template_dir)?;
 
     // Create template manifest
-    fs::write(template_dir.join("template.yaml"), TEMPLATE_MANIFEST)?;
+    fs::write(template_dir.join("manifest.yaml"), TEMPLATE_MANIFEST)?;
 
     // Create template files
     fs::create_dir_all(template_dir.join("handlers"))?;
