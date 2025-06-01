@@ -26,6 +26,7 @@
 //! ```
 
 use crate::Error;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -210,16 +211,18 @@ impl OpenAPISpec {
         let mut tags: Vec<String> = Vec::new();
         if let Some(get_item) = path_item.get("get") {
             if let Some(obj) = get_item.as_object() {
-                summary = obj
+                let raw_summary = obj
                     .get("summary")
                     .and_then(JsonValue::as_str)
                     .unwrap_or("")
                     .to_string();
-                description = obj
+                summary = OpenAPISpec::sanitize_markdown(&raw_summary);
+                let raw_description = obj
                     .get("description")
                     .and_then(JsonValue::as_str)
                     .unwrap_or("")
                     .to_string();
+                description = OpenAPISpec::sanitize_markdown(&raw_description);
                 tags = obj
                     .get("tags")
                     .and_then(JsonValue::as_array)
@@ -239,9 +242,19 @@ impl OpenAPISpec {
         let mut parameters: Vec<JsonValue> = Vec::new();
         if let Some(get_item) = path_item.get("get").and_then(JsonValue::as_object) {
             if let Some(seq) = get_item.get("parameters").and_then(JsonValue::as_array) {
-                for param in seq {
+                // Path parameters first
+                for param in seq.iter().filter(|p| p.get("in").and_then(JsonValue::as_str) == Some("path")) {
                     if let Some(ref_str) = param.get("$ref").and_then(JsonValue::as_str) {
-                        // Resolve JSON Pointer (remove leading '#')
+                        if let Some(resolved) = self.json.pointer(&ref_str[1..]) {
+                            parameters.push(resolved.clone());
+                        }
+                    } else {
+                        parameters.push(param.clone());
+                    }
+                }
+                // Query parameters next
+                for param in seq.iter().filter(|p| p.get("in").and_then(JsonValue::as_str) == Some("query")) {
+                    if let Some(ref_str) = param.get("$ref").and_then(JsonValue::as_str) {
                         if let Some(resolved) = self.json.pointer(&ref_str[1..]) {
                             parameters.push(resolved.clone());
                         }
@@ -389,6 +402,42 @@ impl OpenAPISpec {
             })
             .collect()
     }
+
+    /// Sanitizes Markdown for Rust doc comments and Swagger UI.
+    fn sanitize_markdown(input: &str) -> String {
+        use regex::Regex;
+        // Regex for problematic Unicode (e.g., smart quotes, em-dash)
+        let unicode_re = Regex::new(r"[\u2018\u2019\u201C\u201D\u2014]").unwrap();
+        // Regex to collapse any whitespace sequence into a single space
+        let ws_re = Regex::new(r"\s+").unwrap();
+        input
+            .lines()
+            .map(|line| {
+                let mut line = line.replace('\t', " ");
+                // Remove problematic Unicode
+                line = unicode_re
+                    .replace_all(&line, |caps: &regex::Captures| match &caps[0] {
+                        "\u{2018}" | "\u{2019}" => "'",
+                        "\u{201C}" | "\u{201D}" => "\"",
+                        "\u{2014}" => "-",
+                        _ => "",
+                    })
+                    .to_string();
+                // Trim edges and collapse inner whitespace
+                let mut trimmed = ws_re.replace_all(&line.trim(), " ").to_string();
+                // Remove spaces around hyphens
+                trimmed = trimmed.replace(" - ", "-").replace("- ", "-").replace(" -", "-");
+                // Escape backslashes and quotes
+                let mut safe = trimmed.replace('\\', "\\\\").replace('"', "\\\"");
+                // Escape braces and brackets
+                safe = safe.replace("{", "&#123;").replace("}", "&#125;")
+                           .replace("[", "&#91;").replace("]", "&#93;");
+                safe
+            })
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 #[cfg(test)]
@@ -473,5 +522,47 @@ mod tests {
             .filter_map(|r| r.get("name").and_then(JsonValue::as_str))
             .collect();
         assert_eq!(names, vec!["k", "m"]);
+    }
+
+    #[test]
+    fn test_sanitize_markdown_basic() {
+        let raw = "Line one\n\nLine two";
+        assert_eq!(OpenAPISpec::sanitize_markdown(raw), "Line one Line two");
+    }
+
+    #[test]
+    fn test_sanitize_markdown_escape_and_unicode() {
+        let raw = "\"hi\" {x} “quote” — dash";
+        let out = OpenAPISpec::sanitize_markdown(raw);
+        // Check escapes
+        assert!(out.contains("\\\"hi\\\""));
+        assert!(out.contains("&#123;x&#125;"));
+        // Unicode replaced
+        assert!(!out.contains("“"));
+        assert!(!out.contains("—"));
+    }
+
+    #[test]
+    fn test_extract_operation_metadata_trims_and_sanitizes() {
+        let path_item = json!({"get": {"summary": " sum \n next", "description": " desc-\tline", "tags": ["t"]}});
+        let (s, d, tags) = OpenAPISpec::extract_operation_metadata(&path_item);
+        assert_eq!(s, "sum next");
+        assert_eq!(d, "desc-line");
+        assert_eq!(tags, vec!["t".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_parameters_ordering() {
+        let spec = OpenAPISpec { json: json!({}) };
+        let path_item = json!({"get": {"parameters": [
+            {"name": "q", "in": "query"},
+            {"name": "p", "in": "path"}
+        ]}});
+        let names: Vec<String> = spec
+            .extract_parameters_for_handler(&path_item)
+            .into_iter()
+            .filter_map(|p| p.get("name").and_then(JsonValue::as_str).map(String::from))
+            .collect();
+        assert_eq!(names, vec!["p".to_string(), "q".to_string()]);
     }
 }
