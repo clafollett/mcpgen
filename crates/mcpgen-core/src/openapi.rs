@@ -177,6 +177,11 @@ impl OpenAPISpec {
             let param_infos = self.extract_parameter_info(item);
             let (props_json, spec_file) = self.extract_properties_json_value(item, path)?;
             let property_infos = OpenAPISpec::extract_property_info(&props_json);
+            // Derive properties_schema as JSON map for template
+            let properties_schema = match props_json.as_object() {
+                Some(map) => map.clone(),
+                None => JsonMap::default(),
+            };
             // Build schema reference
             let response_schema =
                 OpenAPISpec::build_response_schema(&format!("{}Response", endpoint));
@@ -195,7 +200,7 @@ impl OpenAPISpec {
                 summary,
                 description,
                 tags,
-                properties_schema: JsonMap::default(),
+                properties_schema,
                 response_schema,
                 spec_file_name: spec_file,
                 valid_fields: Vec::new(),
@@ -522,6 +527,18 @@ mod tests {
             .filter_map(|r| r.get("name").and_then(JsonValue::as_str))
             .collect();
         assert_eq!(names, vec!["k", "m"]);
+    }
+
+    #[test]
+    fn test_extract_row_properties_direct() {
+        let props = json!({"x": {"type": "string"}, "y": {"type": "integer"}});
+        let rows = OpenAPISpec::extract_row_properties(&props);
+        let mut names: Vec<_> = rows
+            .iter()
+            .filter_map(|r| r.get("name").and_then(JsonValue::as_str))
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["x", "y"]);
     }
 
     #[test]
