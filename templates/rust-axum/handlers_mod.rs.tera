@@ -64,7 +64,11 @@ impl ServerHandler for McpServer {
                 tools: Some(tools_capability),
             },
             server_info: Implementation::from_build_env(),
-            instructions: Some(r#"{{ agent_instructions | default('') }}"#.into()),
+            {% if agent_instructions %}
+            instructions: Some(r#"{{ agent_instructions }}"#.into()),
+            {% else %}
+            instructions: None,
+            {% endif %}
         };
 
         debug!("[MCP] Returning ServerInfo with enabled tools and resources: {:?}", info);
@@ -105,7 +109,7 @@ impl ServerHandler for McpServer {
         let result = if let Some(endpoint) = uri.strip_prefix(prefix) {
             let schema_json = match endpoint.to_lowercase().as_str() {
                 {%- for ep in endpoints %}
-                "{{ ep.endpoint }}" => include_str!("../schemas/{{ ep.endpoint }}.json"),
+                "{{ ep.endpoint }}" => include_str!("../../schemas/{{ ep.endpoint }}.json"),
                 {%- endfor %}
                 _ => return std::future::ready(Err(Error::from(ErrorData::resource_not_found(
                     format!("Schema not found for endpoint '{}': unknown endpoint", endpoint),

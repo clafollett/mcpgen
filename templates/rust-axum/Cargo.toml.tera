@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 default-run = "{{ project_name }}"
 
+[workspace]
+# This empty workspace table prevents inheriting the parent workspace configuration
+
 [[bin]]
 name = "{{ project_name }}"
 path = "src/main.rs"

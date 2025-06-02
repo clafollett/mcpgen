@@ -10,6 +10,8 @@ files:
     destination: Cargo.toml
   - source: common.rs.tera
     destination: src/common.rs
+  - source: config.rs.tera
+    destination: src/config.rs
   - source: handler.rs.tera
     for_each: endpoint
     destination: src/handlers/{endpoint}.rs

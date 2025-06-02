@@ -1,6 +1,7 @@
 //! Main entry point for the generated Axum MCP server
 
 // Internal modules
+mod common;
 mod config;
 mod handlers;
 
@@ -81,6 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], {{ server_port }}));
     debug!("Server listening on {}", addr);
     
+    // Create a TCP listener
+    let listener = tokio::net::TcpListener::bind(addr).await.expect("Failed to bind to address");
+    
     // Create a shutdown signal for graceful shutdown
     let shutdown = async {
         let ctrl_c = async {
@@ -108,8 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Start the server with graceful shutdown
-    let server = axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+    let server = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown);
 
     debug!("Server started successfully");

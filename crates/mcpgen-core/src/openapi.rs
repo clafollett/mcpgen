@@ -78,6 +78,10 @@ pub struct EndpointContext {
     pub endpoint: String,
     /// Uppercase form of the endpoint for type names
     pub endpoint_cap: String,
+    /// Sanitized endpoint name for file system use
+    pub endpoint_fs: String,
+    /// Raw endpoint path as defined in the OpenAPI spec
+    pub endpoint_raw: String,
     /// Name of the generated function for the endpoint
     pub fn_name: String,
     /// Name of the generated parameters struct (e.g., 'users_params')
@@ -172,7 +176,7 @@ impl OpenAPISpec {
             if item.get("get").is_none() {
                 continue;
             }
-            let endpoint = path.trim_start_matches('/').replace('/', "_");
+            let endpoint_raw = path.trim_start_matches('/').replace('/', "_");
             // Extract metadata
             let (summary, description, tags) = OpenAPISpec::extract_operation_metadata(item);
             // Typed parameters and properties
@@ -186,11 +190,17 @@ impl OpenAPISpec {
             };
             // Build schema reference
             let response_schema =
-                OpenAPISpec::build_response_schema(&format!("{}Response", endpoint));
+                OpenAPISpec::build_response_schema(&format!("{}Response", endpoint_raw));
+
+            // Sanitize endpoint name for Rust identifier
+            let endpoint = OpenAPISpec::sanitize_endpoint_name(&endpoint_raw);
+
             // Assemble context
             let ctx = EndpointContext {
                 endpoint: endpoint.clone(),
-                endpoint_cap: endpoint.to_uppercase(),
+                endpoint_cap: endpoint[..1].to_uppercase() + &endpoint[1..],
+                endpoint_fs: OpenAPISpec::sanitize_filename(&endpoint_raw),
+                endpoint_raw: endpoint_raw.clone(),
                 fn_name: endpoint.clone(),
                 parameters_type: format!("{}Params", endpoint),
                 properties_type: format!("{}Properties", endpoint),
@@ -435,6 +445,55 @@ impl OpenAPISpec {
                 }
             })
             .collect()
+    }
+
+    /// Sanitize a string to be safe for use as a filename across all operating systems
+    /// Replaces any non-alphanumeric characters with underscores
+    fn sanitize_filename(name: &str) -> String {
+        name.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
+    /// Sanitize endpoint names to be valid Rust module identifiers
+    /// Replaces path parameters like {petId} with underscore_param format
+    fn sanitize_endpoint_name(endpoint: &str) -> String {
+        // Replace any characters that aren't valid in Rust identifiers
+        let mut result = String::new();
+
+        // First, replace common problematic patterns
+        let s = endpoint.replace("{", "").replace("}", "");
+        let s = s.replace("/", "_").replace("-", "_");
+
+        // Then ensure we only have valid Rust identifier characters
+        for c in s.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                result.push(c);
+            } else {
+                result.push('_');
+            }
+        }
+
+        // Ensure it starts with a letter or underscore (valid Rust identifier)
+        if !result.is_empty()
+            && !result.chars().next().unwrap().is_alphabetic()
+            && result.chars().next().unwrap() != '_'
+        {
+            result = format!("m_{}", result);
+        }
+
+        // Handle empty string case
+        if result.is_empty() {
+            result = "root".to_string();
+        }
+
+        result
     }
 
     /// Sanitizes Markdown for Rust doc comments and Swagger UI.

@@ -2,7 +2,7 @@
 
 // Internal imports (std, crate)
 use crate::common::*;
-use crate::config::FdicApiConfig;
+use crate::config::Config;
 
 // External imports (alphabetized)
 use rmcp::handler::server::tool::IntoCallToolResult;
@@ -86,7 +86,7 @@ Responses:
     503: Service Unavailable
     504: Gateway Timeout
 Tag: {{ tags.0 }}"#]
-pub async fn {{ endpoint }}_handler(config: &ApiConfig, params: &{{ parameters_type }}) -> Result<CallToolResult, rmcp::Error> {
+pub async fn {{ endpoint }}_handler(config: &Config, params: &{{ parameters_type }}) -> Result<CallToolResult, rmcp::Error> {
     // Log incoming request parameters and request details as structured JSON
     info!(
         target = "handler",
@@ -110,11 +110,11 @@ pub async fn {{ endpoint }}_handler(config: &ApiConfig, params: &{{ parameters_t
             );
         },
         Err(e) => {
-            error!(target = "handler", event = "fdic_api_error", endpoint = "{{ endpoint }}", error = ?e);
+            error!(target = "handler", event = "api_error", endpoint = "{{ endpoint }}", error = ?e);
         }
     }
 
-    // Log outgoing FDIC API request as structured JSON
+    // Log outgoing API request as structured JSON
     resp.and_then(|r| r.into_call_tool_result())
 }
 

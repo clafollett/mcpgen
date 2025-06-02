@@ -32,7 +32,7 @@
 # # How does it address the issue?
 # - Updated OpenAPI JSON generation to match spec for parameter objects
 # - Added helper to map ParameterInfo to OpenAPI-compliant objects
-# - Improved validation and error messaging for FDIC endpoint parameters
+# - Improved validation and error messaging for endpoint parameters
 
 # # Side effects, risks, or other impacts:
 # - No breaking changes, but downstream consumers will see improved parameter docs

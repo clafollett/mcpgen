@@ -1,14 +1,14 @@
 //! End-to-end integration tests for MCPGen CLI
 
+use anyhow::{Context, Result};
+use lazy_static::lazy_static;
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::fs;
-use std::ffi::OsStr;
-use anyhow::{Result, Context};
-use lazy_static::lazy_static;
 
 // Test configuration
-const SCAFFOLD_DIR: &str = ".mcpgen_scaffold";
+const SCAFFOLD_DIR: &str = ".mcpgen";
 
 /// Test context containing paths and configuration
 struct TestContext {
@@ -35,11 +35,11 @@ impl TestContext {
     /// Get a list of all template names in the templates directory
     fn list_templates(&self) -> Result<Vec<String>> {
         let mut templates = Vec::new();
-        
+
         for entry in fs::read_dir(&self.templates_dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(OsStr::to_str) {
                     // Skip hidden directories
@@ -49,7 +49,7 @@ impl TestContext {
                 }
             }
         }
-        
+
         Ok(templates)
     }
 
@@ -65,8 +65,9 @@ impl TestContext {
             .and_then(OsStr::to_str)
             .unwrap_or("unknown")
             .replace('.', "_");
-            
-        self.output_dir.join(format!("{}_{}", template_name, spec_stem))
+
+        self.output_dir
+            .join(format!("{}_{}", template_name, spec_stem))
     }
 }
 
@@ -82,12 +83,11 @@ fn project_root() -> Result<PathBuf> {
 
 /// List all files recursively in a directory
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use anyhow::Context;
+    use std::fs;
 
     // Test fixtures
     fn get_test_spec_path(relative_path: &str) -> String {
@@ -95,7 +95,7 @@ mod tests {
         let base_path = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
         base_path.join(relative_path).to_str().unwrap().to_string()
     }
-    
+
     // Helper function to clean up environment variables after test
     fn cleanup_env_vars() {
         let env_vars = [
@@ -104,7 +104,7 @@ mod tests {
             "MCPGEN_LOG_FILE",
             "MCPGEN_TEMPLATE_CONTEXT",
         ];
-        
+
         // Use unsafe block for remove_var as it modifies process state
         unsafe {
             for var in env_vars {
@@ -118,16 +118,14 @@ mod tests {
             get_test_spec_path("tests/fixtures/openapi/petstore.openapi.v3.json"),
             get_test_spec_path("tests/fixtures/openapi/petstore.swagger.v2.json"),
         ];
-        
-        static ref OPENAPI_V3_SPEC: String = get_test_spec_path("tests/fixtures/openapi/petstore.openapi.v3.json");
-        static ref SWAGGER_V2_SPEC: String = get_test_spec_path("tests/fixtures/openapi/petstore.swagger.v2.json");
+        static ref OPENAPI_V3_SPEC: String =
+            get_test_spec_path("tests/fixtures/openapi/petstore.openapi.v3.json");
+        static ref SWAGGER_V2_SPEC: String =
+            get_test_spec_path("tests/fixtures/openapi/petstore.swagger.v2.json");
     }
 
     // Required files that must exist in the generated output
-    const REQUIRED_FILES: &[&str] = &[
-        "Cargo.toml",
-        "src/main.rs",
-    ];
+    const REQUIRED_FILES: &[&str] = &["Cargo.toml", "src/main.rs"];
 
     #[test]
     fn test_all_templates_with_openapi_specs() -> Result<()> {
@@ -135,90 +133,108 @@ mod tests {
         cleanup_env_vars();
         let ctx = TestContext::new()?;
         let templates = ctx.list_templates()?;
-        
+
         if templates.is_empty() {
             return Err(anyhow::anyhow!("No templates found in templates directory"));
         }
-        
+
         println!("Found {} templates: {:?}", templates.len(), templates);
-        
+
         // Test each template with both OpenAPI specs
         for template in templates {
             println!("\nTesting template: {}", template);
-            
+
             // Test with OpenAPI v3 spec
-            test_template_with_spec(&ctx, &template, &OPENAPI_V3_SPEC)
-                .with_context(|| format!("Failed testing template {} with OpenAPI v3 spec", template))?;
-            
+            test_template_with_spec(&ctx, &template, &OPENAPI_V3_SPEC).with_context(|| {
+                format!("Failed testing template {} with OpenAPI v3 spec", template)
+            })?;
+
             // Test with Swagger v2 spec
-            test_template_with_spec(&ctx, &template, &SWAGGER_V2_SPEC)
-                .with_context(|| format!("Failed testing template {} with Swagger v2 spec", template))?;
+            test_template_with_spec(&ctx, &template, &SWAGGER_V2_SPEC).with_context(|| {
+                format!("Failed testing template {} with Swagger v2 spec", template)
+            })?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Test a specific template with a given OpenAPI spec
-    fn test_template_with_spec(ctx: &TestContext, template_name: &str, spec_path: &str) -> Result<()> {
+    fn test_template_with_spec(
+        ctx: &TestContext,
+        template_name: &str,
+        spec_path: &str,
+    ) -> Result<()> {
         let output_dir = ctx.output_path(template_name, spec_path);
         let template_path = ctx.template_path(template_name);
-        
+
         // Clean up any previous output
         if output_dir.exists() {
-            println!("  Removing existing output directory: {}", output_dir.display());
+            println!(
+                "  Removing existing output directory: {}",
+                output_dir.display()
+            );
             fs::remove_dir_all(&output_dir)
                 .with_context(|| format!("Failed to remove directory: {}", output_dir.display()))?;
         }
-        
+
         // Ensure the parent directory of the output directory exists
         if let Some(parent) = output_dir.parent() {
             if !parent.exists() {
                 println!("  Creating parent directory: {}", parent.display());
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("Failed to create parent directory: {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create parent directory: {}", parent.display())
+                })?;
             }
         }
-        
+
         // Let the CLI handle the actual directory creation to avoid race conditions
         println!("  Output will be generated in: {}", output_dir.display());
-        
+
         println!("  Testing with spec: {}", spec_path);
         println!("  Output directory: {}", output_dir.display());
-        
+
         // Verify template directory exists and list its contents
         println!("  Template directory: {}", template_path.display());
         if !template_path.exists() {
-            return Err(anyhow::anyhow!("Template directory not found: {}", template_path.display()));
+            return Err(anyhow::anyhow!(
+                "Template directory not found: {}",
+                template_path.display()
+            ));
         }
-        
+
         // List template files for debugging
         println!("  Template files:");
         for entry in fs::read_dir(&template_path)? {
             let entry = entry?;
             println!("    - {}", entry.file_name().to_string_lossy());
         }
-        
+
         // Build the CLI binary first
         println!("  Building mcpgen-cli in release mode...");
         let build_status = Command::new("cargo")
             .args(["build", "--release"])
             .status()
             .context("Failed to execute cargo build")?;
-            
+
         if !build_status.success() {
-            return Err(anyhow::anyhow!("Failed to build mcpgen-cli (status: {})", build_status));
+            return Err(anyhow::anyhow!(
+                "Failed to build mcpgen-cli (status: {})",
+                build_status
+            ));
         }
 
         // Use the built binary from the workspace's target/release directory
-        let binary_path = project_root()?
-            .join("target/release/mcpgen");
-            
+        let binary_path = project_root()?.join("target/release/mcpgen");
+
         println!("Using binary at: {}", binary_path.display());
-        
+
         if !binary_path.exists() {
-            return Err(anyhow::anyhow!("Binary not found at: {}", binary_path.display()));
+            return Err(anyhow::anyhow!(
+                "Binary not found at: {}",
+                binary_path.display()
+            ));
         }
-            
+
         // Clean up any existing env vars and set server options
         cleanup_env_vars();
         // set server options
@@ -226,7 +242,7 @@ mod tests {
             std::env::set_var("MCPGEN_SERVER_PORT", "8080");
             std::env::set_var("MCPGEN_LOG_FILE", "log.txt");
         }
-        
+
         // Build the command with required arguments
         let mut cmd = Command::new(binary_path);
         cmd.arg("scaffold")
@@ -238,34 +254,50 @@ mod tests {
             .arg(&template_path)
             .arg("--output")
             .arg(&output_dir);
-            
+
         // Add optional arguments
         if let Ok(port) = std::env::var("MCPGEN_SERVER_PORT") {
             cmd.arg("--port").arg(port);
         }
-        
+
         if let Ok(log_file) = std::env::var("MCPGEN_LOG_FILE") {
             cmd.arg("--log-file").arg(log_file);
         }
-        
-        // Execute the command
+
+        // Print the full command being executed for debugging
+        println!("Executing command: {:?}", cmd.get_program());
+        for arg in cmd.get_args() {
+            println!("  {:?}", arg);
+        }
+
+        // Execute the command with stderr capture
         let output = cmd
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .output()
             .context("Failed to execute mcpgen-cli")?;
-            
+
+        // Always print stdout and stderr for debugging
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        println!("=== Command Output ===");
+        println!("Status: {}", output.status);
+        println!("=== STDOUT ===\n{}", stdout);
+        println!("=== STDERR ===\n{}", stderr);
+
         // Check if command succeeded
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!(
-                "Scaffold failed for template {} with spec {}\nError: {}",
+                "Scaffold failed for template {} with spec {}\nStatus: {}\n=== STDOUT ===\n{}\n=== STDERR ===\n{}",
                 template_name,
                 spec_path,
+                output.status,
+                stdout,
                 stderr
             ));
         }
-        
+
         // Verify the output directory was created
         if !output_dir.exists() {
             return Err(anyhow::anyhow!(
@@ -274,7 +306,7 @@ mod tests {
                 spec_path
             ));
         }
-        
+
         // Check for required files
         for file in REQUIRED_FILES {
             let path = output_dir.join(file);
@@ -287,7 +319,7 @@ mod tests {
                 ));
             }
         }
-        
+
         // Try to build the generated project
         println!("  Building generated project...");
         let build_status = Command::new("cargo")
@@ -295,7 +327,7 @@ mod tests {
             .args(["build", "--release"])
             .status()
             .context("Failed to execute cargo build")?;
-            
+
         if !build_status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to build generated project for template {} with spec {}",
@@ -303,7 +335,7 @@ mod tests {
                 spec_path
             ));
         }
-        
+
         println!("  Success!");
         Ok(())
     }

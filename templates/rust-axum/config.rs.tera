@@ -1,0 +1,45 @@
+//! Configuration module for the generated server
+
+// Internal imports (std, crate)
+use std::env;
+use std::path::PathBuf;
+
+/// Server configuration
+#[derive(Clone, Debug, Default)]
+pub struct Config {
+    /// Server port
+    pub port: u16,
+    /// Log directory
+    pub log_dir: PathBuf,
+    /// Log file name
+    pub log_file: String,
+    /// Base API URL
+    pub api_url: String,
+}
+
+impl Config {
+    /// Load configuration from environment variables
+    pub fn load() -> Self {
+        let port = env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or({{ server_port | default(value=8080) }});
+            
+        let log_dir = env::var("LOG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("logs"));
+            
+        let log_file = env::var("LOG_FILE")
+            .unwrap_or_else(|_| "{{ log_file | default(value="mcpgen") }}".to_string());
+            
+        let api_url = env::var("API_URL")
+            .unwrap_or_else(|_| "https://api.example.com".to_string());
+            
+        Self {
+            port,
+            log_dir,
+            log_file,
+            api_url,
+        }
+    }
+}

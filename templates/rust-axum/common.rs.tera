@@ -1,5 +1,5 @@
 // Internal imports (std, crate)
-use crate::config::FdicApiConfig;
+use crate::config::Config;
 use std::collections::HashMap;
 
 // Public/external imports (alphabetized)
@@ -17,9 +17,9 @@ pub trait Endpoint {
     fn get_params(&self) -> HashMap<String, String>;
 }
 
-/// Proxies query parameters and endpoint-specific parameters to the FDIC BankFind API, executes the proxied HTTP request.
-/// Returns the result or our local FdicProxyError.
-pub async fn get_endpoint_response<E, R>(config: &FdicApiConfig, endpoint: &E) -> Result<R, rmcp::Error>
+/// Proxies query parameters and endpoint-specific parameters to the API, executes the proxied HTTP request.
+/// Returns the result or our local ProxyError.
+pub async fn get_endpoint_response<E, R>(config: &Config, endpoint: &E) -> Result<R, rmcp::Error>
 where
     E: Endpoint + Clone + Send + Sync,
     R: Serialize + DeserializeOwned,
@@ -27,7 +27,7 @@ where
     // Clone params to allow modification without affecting caller's original
     let mut params = endpoint.get_params();
     let client = reqwest::Client::new();
-    let url = format!("{}/{}", config.base_url.trim_end_matches('/'), endpoint.name());
+    let url = format!("{}/{}", config.api_url.trim_end_matches('/'), <E as Endpoint>::name());
 
     log::debug!("Sending request: URL={}, Query={:?}", url, params);
 
@@ -86,7 +86,7 @@ where
                         "source": "api",
                         "original_code": custom_code,
                         "status": status.as_u16(),
-                        "fdic_raw": val
+                        "raw": val
                     })),
                 );
                 return Err(rmcp::Error::from(error_data));

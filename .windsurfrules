@@ -30,7 +30,7 @@ I want `main` to end up as the top level function after all imports and internal
 ```rust
 // Internal imports (std, crate)
 use std::collections::HashMap;
-use crate::config::FdicApiConfig;
+use crate::config::ApiConfig;
 
 // Public/external imports (alphabetized)
 use axum::{extract::{Query, State}, http::StatusCode, response::IntoResponse, response::Response};
@@ -53,8 +53,7 @@ use utoipa::{IntoParams, ToSchema};
 - Use mock servers for external API dependencies in tests.
 
 ## Project-Specific
-- MCP endpoints must proxy all relevant FDIC BankFind API parameters and validate them.
-- Ensure all string parameters (except for `api_key` and `filename`) are uppercased before proxying to FDIC API.
+- MCP endpoints must proxy all relevant API parameters and validate them.
 - Add clear TODO comments for any temporary workarounds (e.g., Swagger UI with Axum 0.7+).
 
 ## Collaboration

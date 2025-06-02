@@ -11,12 +11,14 @@
             "program": "${workspaceFolder}/target/debug/mcpgen",
             "args": [
                 "scaffold",
-                "--template-dir",
-                "${workspaceFolder}/templates/rust-axum",
                 "--spec",
                 "${workspaceFolder}/tests/fixtures/openapi/petstore.openapi.v3.json",
+                "--template",
+                "rust-axum",
+                "--template-dir",
+                "${workspaceFolder}/templates/rust-axum",
                 "--output",
-                "${workspaceFolder}/tests/integration_test_output"
+                "${workspaceFolder}/.mcpgen/rust-axum-scaffold-test"
             ],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "rust: cargo build"

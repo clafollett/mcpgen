@@ -366,9 +366,14 @@ impl TemplateManager {
             .build_context(spec, &output_path, &template_opts)
             .await?;
 
+        log::debug!("Starting template processing with context: {:#?}", context);
         // Process all template files
         self.process_template_files(&context, &output_path, &template_opts, spec)
-            .await?;
+            .await
+            .map_err(|e| {
+                log::error!("Template processing failed: {}", e);
+                e
+            })?;
 
         // Run post-generation hooks if any
         self.execute_post_generation_hooks(&output_path).await?;
@@ -407,6 +412,33 @@ impl TemplateManager {
         if let Ok(spec_value) = serde_json::to_value(spec) {
             base_map.insert("spec".to_string(), spec_value);
         }
+
+        // Add spec file name for reference in templates
+        base_map.insert("spec_file_name".to_string(), json!("openapi.json"));
+
+        // Extract endpoints from the OpenAPI spec
+        let endpoints = spec.parse_endpoints().await?;
+
+        base_map.insert("endpoints".to_string(), json!(endpoints));
+
+        // Add server configuration variables needed by templates
+        base_map.insert("log_file".to_string(), json!("mcpgen"));
+        base_map.insert("server_port".to_string(), json!(8080));
+
+        // Add any template options to the context if provided
+        if let Some(opts) = template_opts {
+            // Override defaults with template options if provided
+            if let Some(port) = opts.server_port {
+                base_map.insert("server_port".to_string(), json!(port));
+            }
+            if let Some(log_file) = &opts.log_file {
+                base_map.insert("log_file".to_string(), json!(log_file));
+            }
+        }
+
+        // For debugging, log the context keys
+        let keys_str: Vec<String> = base_map.keys().map(|k| k.to_string()).collect();
+        log::debug!("Template context keys: {}", keys_str.join(", "));
 
         Ok(serde_json::Value::Object(base_map))
     }
@@ -485,16 +517,38 @@ impl TemplateManager {
             Context::new()
         };
 
+        // Log the template context for debugging
+        log::debug!(
+            "Rendering template: {} with context: {:#?}",
+            file.source,
+            tera_context
+        );
+
         // Render the template
-        let rendered = self
-            .tera()
-            .render(&file.source, &tera_context)
-            .map_err(|e| {
-                io::Error::new(
+        let rendered = match self.tera.render(&file.source, &tera_context) {
+            Ok(r) => r,
+            Err(e) => {
+                // Convert tera::Context to a serializable Map before serializing
+                let context_map: std::collections::HashMap<String, serde_json::Value> =
+                    tera_context
+                        .into_json()
+                        .as_object()
+                        .map(|obj| obj.clone().into_iter().collect())
+                        .unwrap_or_default();
+                let context_json = serde_json::to_string_pretty(&context_map)
+                    .unwrap_or_else(|_| "Failed to serialize context".to_string());
+                log::error!(
+                    "Failed to render template {}: {}\nTemplate context: {}",
+                    file.source,
+                    e,
+                    context_json
+                );
+                return Err(crate::error::Error::Io(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("Template rendering failed: {}", e),
-                )
-            })?;
+                    format!("Template rendering failed for {}: {}", file.source, e),
+                )));
+            }
+        };
 
         // Write the output file
         fs::write(&dest_path, rendered).await.map_err(|e| {
@@ -536,15 +590,32 @@ impl TemplateManager {
                 .unwrap_or(false);
 
             if include && !exclude {
-                // Create a context for this operation
-                // Create a new context for this operation - start with a clean context
                 let mut context = base_context.clone();
 
-                // Add endpoint context
-                context.insert("endpoint", ctx);
+                context.insert("endpoint", &ctx.endpoint);
+                context.insert("endpoint_cap", &ctx.endpoint_cap);
+                context.insert("endpoint_raw", &ctx.endpoint_raw);
+                context.insert("fn_name", &ctx.fn_name);
+                context.insert("summary", &ctx.summary);
+                context.insert("description", &ctx.description);
+                context.insert("parameters", &ctx.parameters);
+                context.insert("properties", &ctx.properties);
+                context.insert("tags", &ctx.tags);
+                context.insert(
+                    "parameters_type",
+                    &format!("{}{}", ctx.endpoint_cap, "Parameters"),
+                );
+                context.insert(
+                    "properties_type",
+                    &format!("{}{}", ctx.endpoint_cap, "Properties"),
+                );
+
+                log::debug!("Processing template for operation: {}", ctx.endpoint);
 
                 // Generate schema file
                 let schema_path = schemas_dir.join(format!("{}.json", ctx.endpoint));
+                // TODO: In the future, we should recursively resolve all schema references
+                // For now, we're just using the envelope_properties as-is
                 let schema_json = serde_json::to_string_pretty(&ctx.envelope_properties)?;
                 fs::write(&schema_path, schema_json).await.map_err(|e| {
                     io::Error::new(
@@ -557,8 +628,10 @@ impl TemplateManager {
                     )
                 })?;
 
-                // Generate the output path
-                let output_file = file.destination.replace("{{endpoint}}", &ctx.endpoint);
+                // Generate the output path with sanitized endpoint name
+                let output_file = file.destination
+                    .replace("{{endpoint}}", &ctx.endpoint_fs)
+                    .replace("{endpoint}", &ctx.endpoint_fs);
                 let output_path = output_path.join(&output_file);
 
                 // Create parent directories if they don't exist
