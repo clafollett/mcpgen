@@ -12,8 +12,8 @@ use tera::{Context, Tera};
 use tokio::{fs, task};
 
 use crate::{
-    TemplateOptions, config::Config, error::Result, manifest::TemplateManifest,
-    openapi::OpenAPISpec, template_kind::Template,
+    config::Config, error::Result, manifest::TemplateManifest, openapi::OpenAPISpec,
+    template::Template, template_options::TemplateOptions,
 };
 
 type TeraCache = std::collections::HashMap<String, Arc<Tera>>;
@@ -382,7 +382,7 @@ impl TemplateManager {
         spec: &OpenAPISpec,
         output_path: &Path,
         template_opts: &Option<TemplateOptions>,
-    ) -> Result<Context> {
+    ) -> Result<serde_json::Value> {
         // Build base context with project_name and api_version
         let mut base_map: Map<String, JsonValue> = Map::new();
 
@@ -396,33 +396,25 @@ impl TemplateManager {
             base_map.insert("api_version".to_string(), json!(api_version));
         }
 
-        // Add template options to context if provided
+        // Add MCP Agent instructions if provided
         if let Some(opts) = template_opts {
-            if let Some(context) = &opts.context {
-                if let JsonValue::Object(additional) = context {
-                    for (k, v) in additional {
-                        base_map.insert(k.clone(), v.clone());
-                    }
-                }
+            if let Some(instructions) = &opts.agent_instructions {
+                base_map.insert("agent_instructions".to_string(), instructions.clone());
             }
         }
 
-        // Convert to serde_json::Value for Tera
-        let mut context = Context::from_value(JsonValue::Object(base_map))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
         // Add the full spec to the context if needed
         if let Ok(spec_value) = serde_json::to_value(spec) {
-            context.insert("spec", &spec_value);
+            base_map.insert("spec".to_string(), spec_value);
         }
 
-        Ok(context)
+        Ok(serde_json::Value::Object(base_map))
     }
 
     /// Process all template files with the given context
     async fn process_template_files(
         &self,
-        base_context: &Context,
+        base_context: &serde_json::Value,
         output_path: &Path,
         template_opts: &Option<TemplateOptions>,
         spec: &OpenAPISpec,
@@ -432,7 +424,7 @@ impl TemplateManager {
             .manifest
             .files
             .iter()
-            .any(|f| f.for_each.as_deref() == Some("operation"));
+            .any(|f| f.for_each.as_deref() == Some("endpoint"));
 
         let endpoint_contexts = if needs_endpoints {
             spec.parse_endpoints().await?
@@ -441,11 +433,19 @@ impl TemplateManager {
         };
 
         for file in &self.manifest.files {
-            // Handle per-operation generation if specified
-            if file.for_each.as_deref() == Some("operation") {
+            // Handle per-endpoint generation if specified
+            if file.for_each.as_deref() == Some("endpoint") {
+                // Convert base_context to Context for operation processing
+                let context = if let serde_json::Value::Object(obj) = base_context {
+                    Context::from_value(serde_json::Value::Object(obj.clone()))
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                } else {
+                    Context::new()
+                };
+
                 self.process_operation_file(
                     file,
-                    base_context,
+                    &context,
                     output_path,
                     &endpoint_contexts,
                     &template_opts,
@@ -464,7 +464,7 @@ impl TemplateManager {
     async fn process_single_file(
         &self,
         file: &crate::manifest::TemplateFile,
-        base_context: &Context,
+        base_context: &serde_json::Value,
         output_path: &Path,
     ) -> Result<()> {
         let dest_path = output_path.join(&file.destination);
@@ -477,9 +477,32 @@ impl TemplateManager {
         // Create file-specific context
         let file_context = self.create_file_context(base_context, file).await?;
 
-        // Render and write the file
-        self.generate_with_context(&file.source, &file_context, &dest_path)
-            .await?;
+        // Convert file_context to Context
+        let tera_context = if let serde_json::Value::Object(obj) = file_context {
+            Context::from_value(serde_json::Value::Object(obj))
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+        } else {
+            Context::new()
+        };
+
+        // Render the template
+        let rendered = self
+            .tera()
+            .render(&file.source, &tera_context)
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Template rendering failed: {}", e),
+                )
+            })?;
+
+        // Write the output file
+        fs::write(&dest_path, rendered).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to write file {}: {}", dest_path.display(), e),
+            )
+        })?;
 
         Ok(())
     }
@@ -493,6 +516,10 @@ impl TemplateManager {
         endpoint_contexts: &[crate::openapi::EndpointContext],
         template_opts: &Option<TemplateOptions>,
     ) -> Result<()> {
+        // Create schemas directory
+        let schemas_dir = output_path.join("schemas");
+        fs::create_dir_all(&schemas_dir).await?;
+
         for ctx in endpoint_contexts {
             let fn_name = ctx.fn_name.clone();
             let include = template_opts
@@ -509,79 +536,83 @@ impl TemplateManager {
                 .unwrap_or(false);
 
             if include && !exclude {
-                // Create a new context with endpoint-specific data
-                let mut file_context = self.create_file_context(base_context, file).await?;
+                // Create a context for this operation
+                // Create a new context for this operation - start with a clean context
+                let mut context = base_context.clone();
 
                 // Add endpoint context
-                if let JsonValue::Object(obj) = &mut file_context {
-                    if let Ok(ctx_value) = serde_json::to_value(ctx) {
-                        if let JsonValue::Object(fields) = ctx_value {
-                            for (k, v) in fields {
-                                obj.insert(k, v);
-                            }
-                        }
-                    }
-                }
+                context.insert("endpoint", ctx);
 
-                // Generate the output path with operation name
-                let dest_path = output_path.join(file.destination.replace("{operation}", &fn_name));
+                // Generate schema file
+                let schema_path = schemas_dir.join(format!("{}.json", ctx.endpoint));
+                let schema_json = serde_json::to_string_pretty(&ctx.envelope_properties)?;
+                fs::write(&schema_path, schema_json).await.map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!(
+                            "Failed to write schema file {}: {}",
+                            schema_path.display(),
+                            e
+                        ),
+                    )
+                })?;
+
+                // Generate the output path
+                let output_file = file.destination.replace("{{endpoint}}", &ctx.endpoint);
+                let output_path = output_path.join(&output_file);
 
                 // Create parent directories if they don't exist
-                if let Some(parent) = dest_path.parent() {
+                if let Some(parent) = output_path.parent() {
                     fs::create_dir_all(parent).await?;
                 }
 
-                // Render and write the file
-                self.generate_with_context(&file.source, &file_context, &dest_path)
-                    .await?;
+                // Render the template
+                let rendered = self
+                    .tera
+                    .render(file.source.as_str(), &context)
+                    .map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Failed to render template {}: {}", file.source, e),
+                        )
+                    })?;
+
+                // Write the file
+                fs::write(&output_path, rendered).await.map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Failed to write file {}: {}", output_path.display(), e),
+                    )
+                })?;
             }
         }
-
         Ok(())
     }
 
-    /// Create a context for a specific file by merging the base context with file-specific context
+    /// Create a context for a single template file
     async fn create_file_context(
         &self,
-        base_context: &Context,
+        base_context: &serde_json::Value,
         file: &crate::manifest::TemplateFile,
     ) -> Result<serde_json::Value> {
-        // Convert base context to JSON value
-        let mut context = serde_json::Map::new();
+        // Start with the file context if it exists
+        let mut context = if let JsonValue::Object(file_ctx) = &file.context {
+            file_ctx.clone()
+        } else {
+            serde_json::Map::new()
+        };
 
-        // Get all values from the Tera context by trying known keys
-        // Note: This is a workaround since tera::Context doesn't provide a way to iterate keys
-        let known_keys = ["project_name", "api_version", "spec"];
-        
-        for key in known_keys.iter() {
-            if let Some(value) = base_context.get(key) {
-                let value_str = value.to_string();
-                context.insert(key.to_string(), JsonValue::String(value_str));
-            }
-        }
-
-        // Add any additional context from template options
-        if let Some(opts) = base_context.get("template_options") {
-            if let Some(obj) = opts.as_object() {
-                for (k, v) in obj {
+        // Add base context values if they don't exist in file context
+        if let serde_json::Value::Object(base_map) = base_context {
+            for (k, v) in base_map {
+                // Only add if not already in the file context
+                if !context.contains_key(k) {
                     context.insert(k.clone(), v.clone());
                 }
             }
         }
 
-        // Convert to a proper JSON Value
-        let mut context = serde_json::Value::Object(context);
-
-        // Add file-specific context if provided
-        if let JsonValue::Object(file_ctx) = &file.context {
-            if let Some(context_obj) = context.as_object_mut() {
-                for (k, v) in file_ctx {
-                    context_obj.insert(k.clone(), v.clone());
-                }
-            }
-        }
-
-        Ok(context)
+        Ok(serde_json::Value::Object(context))
     }
 
     /// Execute post-generation hooks
@@ -634,7 +665,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::openapi::OpenAPISpec;
-    use crate::template_kind::Template;
+    use crate::template::Template;
     use serde_json::{Map, json};
     use tempfile::TempDir;
 

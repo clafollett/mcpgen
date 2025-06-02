@@ -803,6 +803,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "lazy_static",
  "log",
  "mcpgen-core",
  "serde",

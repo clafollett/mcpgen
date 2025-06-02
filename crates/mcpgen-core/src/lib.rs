@@ -12,47 +12,21 @@ pub mod error;
 pub mod manifest;
 pub mod openapi;
 pub mod template;
-pub mod template_kind;
+pub mod template_manager;
+pub mod template_options;
+
+// Internal crate imports (alphabetized)
+use openapi::OpenAPISpec;
+use template::Template;
+use template_manager::TemplateManager;
 
 // Re-exports (alphabetized)
 pub use config::Config;
 pub use error::{Error, Result};
-
-// Internal crate imports (alphabetized)
-use openapi::OpenAPISpec;
-use template::TemplateManager;
-use template_kind::Template;
+pub use template_options::TemplateOptions;
 
 /// Result type for MCP generation operations
 pub type MCPResult<T> = std::result::Result<T, Error>;
-
-/// Options for template generation
-#[derive(Debug, Default, Clone)]
-pub struct TemplateOptions {
-    /// Whether to include all operations by default
-    pub all_operations: bool,
-
-    /// Whether to generate tests
-    pub include_tests: bool,
-
-    /// Whether to overwrite existing files
-    pub overwrite: bool,
-
-    /// Additional context to pass to templates
-    pub context: Option<serde_json::Value>,
-
-    /// Specific operations to include (overrides all_operations if not empty)
-    pub include_operations: Vec<String>,
-
-    /// Operations to exclude
-    pub exclude_operations: Vec<String>,
-
-    /// Server port for the generated application
-    pub server_port: Option<u16>,
-
-    /// Log file path for the generated application
-    pub log_file: Option<String>,
-}
 
 /// Main entry point for code generation
 pub async fn generate(config: &Config, template_opts: Option<TemplateOptions>) -> Result<()> {

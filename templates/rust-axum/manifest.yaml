@@ -11,7 +11,8 @@ files:
   - source: common.rs.tera
     destination: src/common.rs
   - source: handler.rs.tera
-    destination: src/handlers/mod.rs
+    for_each: endpoint
+    destination: src/handlers/{endpoint}.rs
   - source: handlers_mod.rs.tera
     destination: src/handlers/mod.rs
   - source: main.rs.tera
@@ -27,6 +28,11 @@ template_variables:
   api_version:
     description: API version
     default: "1.0.0"
+    type: string
+  
+  agent_instructions:
+    description: JSON string of MCP agent instructions to embed in the generated server
+    required: false
     type: string
 
 # Directories that should be created before generating files

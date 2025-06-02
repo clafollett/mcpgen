@@ -1,7 +1,6 @@
 # .windsurfrules for mcpgen
 
-## Prime Directive: Do It Right the First Time
-- **IMPORTANT!!!!!** All code, tests, and documentation must be written with maximum accuracy and completeness on the first attempt. No shortcuts, sloppiness, or incomplete implementations are permitted. Any code or test that does not fully match the requirements, struct definitions, or project standards must be considered a failure and corrected immediately.
+## Prime Directive: Do not get in a continuous loop of analysis paralysis. Running analysis on the same code over and over again is not helpful. Fix the code or stop and request help.
 
 ## General Rust Coding Standards
 - **IMPORTANT!!!!!** All code must be idiomatic Rust

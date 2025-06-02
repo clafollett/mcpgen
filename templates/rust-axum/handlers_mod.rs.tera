@@ -64,20 +64,7 @@ impl ServerHandler for McpServer {
                 tools: Some(tools_capability),
             },
             server_info: Implementation::from_build_env(),
-            instructions: Some(r#"{
-  "mcp_agent_rules": {
-    "critical": "Never assume field, filter, or sort compatibility across endpoints. Always check the endpoint schema.",
-    "field_usage": "Use only fields present in the current endpoint schema. Confirm field is allowed for filter, sort, or output.",
-    "schema_discovery": "Valid fields for each endpoint can always be discovered programmatically via the MCP resources capability. Use the /schema endpoints (see list_resources) to fetch the full schema for any endpoint—never guess or hardcode field lists.",
-    "query_validation_checklist": [
-      "Field exists in endpoint schema",
-      "Field is allowed for intended operation (filter/sort/output)",
-      "Never use a field from another endpoint"
-    ],
-    "error_handling": "On query error, re-validate schema and adjust. Never retry unchanged queries.",
-    "pitfall": "Most common error: using a field from another endpoint or for an unsupported operation."
-  }
-}"#.into()),
+            instructions: Some(r#"{{ agent_instructions | default('') }}"#.into()),
         };
 
         debug!("[MCP] Returning ServerInfo with enabled tools and resources: {:?}", info);
@@ -118,7 +105,7 @@ impl ServerHandler for McpServer {
         let result = if let Some(endpoint) = uri.strip_prefix(prefix) {
             let schema_json = match endpoint.to_lowercase().as_str() {
                 {%- for ep in endpoints %}
-                "{{ ep.endpoint }}" => include_str!("../../public/schemas/{{ ep.endpoint }}.json"),
+                "{{ ep.endpoint }}" => include_str!("../schemas/{{ ep.endpoint }}.json"),
                 {%- endfor %}
                 _ => return std::future::ready(Err(Error::from(ErrorData::resource_not_found(
                     format!("Schema not found for endpoint '{}': unknown endpoint", endpoint),

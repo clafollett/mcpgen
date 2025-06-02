@@ -32,11 +32,11 @@ impl Endpoint for {{ parameters_type }} {
 
     fn get_params(&self) -> HashMap<String, String> {
         let mut params = HashMap::new();
-        {% for p in parameters %}{% if p.name not in common_list %}
+        {% for p in parameters %}
         if let Some(val) = &self.{{ p.name }} {
             params.insert("{{ p.name }}".to_string(), val.to_string());
         }
-        {%- endif %}{% endfor %}
+        {% endfor %}
         params
     }
 }
@@ -47,7 +47,7 @@ impl Endpoint for {{ parameters_type }} {
 pub struct {{ properties_type }} {
 {%- for prop in properties %}
     #[schemars(description = r#"{{ prop.title }} - {{ prop.description }}"#)]
-    pub {{ prop.name | snake_case }}: Option<{{ prop.rust_type }}>,
+    pub {{ prop.name | lower }}: Option<{{ prop.rust_type }}>,
 {% endfor %}
 }
 
@@ -125,10 +125,9 @@ mod tests {
     #[test]
     fn test_parameters_struct_serialization() {
         let params = {{ parameters_type }} {
-            common: CommonParameters::default(),
-            {% for p in parameters %}{% if p.name | lower not in common_parameter_names -%}
-            {{ p.name | lower }}: None,
-            {% endif %}{%- endfor %}
+            {% for p in parameters %}
+            {{ p.name }}: None,
+            {% endfor %}
         };
         let _ = serde_json::to_string(&params).unwrap();
     }
@@ -136,8 +135,9 @@ mod tests {
     #[test]
     fn test_properties_struct_serialization() {
         let props = {{ properties_type }} {
-            {% for prop in properties %}{{ prop.name | lower }}: None,
-            {% endfor -%}
+            {% for prop in properties %}
+            {{ prop.name | lower }}: None,
+            {% endfor %}
         };
         let _ = serde_json::to_string(&props).unwrap();
     }

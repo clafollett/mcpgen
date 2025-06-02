@@ -32,7 +32,7 @@ use crate::Error;
 
 // External imports (alphabetized)
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::fs;
 
 /// Represents an OpenAPI specification
@@ -303,22 +303,43 @@ impl OpenAPISpec {
             .ok_or_else(|| {
                 Error::openapi(format!("No 200 response for endpoint '{}'", endpoint))
             })?;
-        let content = response
-            .get("content")
+        // Extract content map once, treat missing content or non-JSON content as no properties
+        let content_map = match response.get("content").and_then(JsonValue::as_object) {
+            Some(m) => m,
+            None => return Ok((JsonValue::Null, None)),
+        };
+        let content = match content_map
+            .get("application/json")
             .and_then(JsonValue::as_object)
-            .and_then(|m| m.get("application/json"))
-            .and_then(JsonValue::as_object)
-            .ok_or_else(|| {
-                Error::openapi(format!("No application/json content for '{}'", endpoint))
-            })?;
+        {
+            Some(m) => m,
+            None => return Ok((JsonValue::Null, None)),
+        };
+        // Extract the actual schema object
         let schema = content
             .get("schema")
             .and_then(JsonValue::as_object)
             .ok_or_else(|| Error::openapi(format!("No schema in content for '{}'", endpoint)))?;
-        let ref_str = schema
-            .get("$ref")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| Error::openapi(format!("No $ref in schema for '{}'", endpoint)))?;
+        // Inline object schema: use direct properties or additionalProperties
+        if schema.get("properties").is_some() || schema.get("additionalProperties").is_some() {
+            let props = schema.get("properties").cloned().unwrap_or(JsonValue::Null);
+            return Ok((props, None));
+        }
+        // Primitive types: return no properties
+        if let Some(typ) = schema.get("type").and_then(JsonValue::as_str) {
+            if typ != "object" && typ != "array" {
+                return Ok((JsonValue::Null, None));
+            }
+        }
+        // Extract reference, support both direct and array item refs
+        let ref_str = match schema.get("$ref").and_then(JsonValue::as_str) {
+            Some(r) => r,
+            None => schema
+                .get("items")
+                .and_then(JsonValue::as_object)
+                .and_then(|o| o.get("$ref").and_then(JsonValue::as_str))
+                .ok_or_else(|| Error::openapi(format!("No $ref in schema for '{}'", endpoint)))?,
+        };
         let key = "#/components/schemas/";
         if !ref_str.starts_with(key) {
             return Err(Error::openapi(format!(

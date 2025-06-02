@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::Parser;
 use mcpgen_core::{
-    TemplateOptions, openapi::OpenAPISpec, template::TemplateManager, template_kind::Template,
+    TemplateOptions, openapi::OpenAPISpec, template::Template, template_manager::TemplateManager,
 };
 use tokio::fs;
 
@@ -69,6 +69,26 @@ async fn main() -> anyhow::Result<()> {
                 .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid template '{}': {}", template, e))?;
 
+            // Debug log template and paths
+            tracing::debug!(
+                "Scaffolding with template: {}, output: {}",
+                template_kind.as_str(),
+                output.display()
+            );
+
+            if let Some(template_dir) = template_dir.as_ref() {
+                tracing::debug!(
+                    "Using custom template directory: {}",
+                    template_dir.display()
+                );
+                if !template_dir.exists() {
+                    return Err(anyhow::anyhow!(
+                        "Template directory not found: {}",
+                        template_dir.display()
+                    ));
+                }
+            }
+
             println!("Generating server with template: {}", template_kind);
 
             // Log the template being used for code generation
@@ -121,6 +141,30 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .context("Failed to initialize template manager")?;
 
+            // Create template options
+            let template_opts = TemplateOptions {
+                all_operations: true,
+                include_operations: Vec::new(),
+                exclude_operations: Vec::new(),
+                server_port: *port,
+                log_file: log_file.clone(),
+                include_tests: false,
+                overwrite: false,
+                agent_instructions: None,
+            };
+
+            tracing::debug!("Creating output directory: {}", output.display());
+
+            // Create output directory if it doesn't exist
+            if let Some(parent) = output.parent() {
+                if !parent.exists() {
+                    tracing::debug!("Creating parent directory: {}", parent.display());
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to create parent directory: {}", e))?;
+                }
+            }
+
             // List available templates for debugging
             println!("Available templates:");
             for template in template_manager.list_templates() {
@@ -151,12 +195,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Create template options with default values
-            let template_opts = TemplateOptions {
-                server_port: *port,
-                log_file: log_file.clone(),
-                ..Default::default()
-            };
+            // Load OpenAPI spec
+            tracing::debug!("Loading OpenAPI spec from: {}", spec.display());
+            let spec_obj = OpenAPISpec::from_file(spec)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to load OpenAPI spec: {}", e))?;
 
             // Create config with template
             let config = mcpgen_core::Config {
@@ -168,8 +211,7 @@ async fn main() -> anyhow::Result<()> {
                 exclude_operations: Vec::new(), // No operations to exclude
             };
 
-            // Load OpenAPI spec and generate code
-            let spec_obj = OpenAPISpec::from_file(&config.openapi_spec).await?;
+            // Generate code
             if let Err(e) = template_manager
                 .generate(&spec_obj, &config, Some(template_opts))
                 .await
