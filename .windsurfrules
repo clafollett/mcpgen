@@ -1,61 +1,83 @@
-# .windsurfrules for mcpgen
+# 🚀 MCPGen Project Standards & Conventions
 
-## Prime Directive: Do not get in a continuous loop of analysis paralysis. Running analysis on the same code over and over again is not helpful. Fix the code or stop and request help.
+## 🚨 Prime Directives
+1. **NO analysis paralysis** - Fix issues or request help after reasonable analysis
+2. **Test-First Development** - Always write failing tests before implementation
+3. **Minimal Viable Changes** - Implement the simplest solution that passes tests, then refactor
 
-## General Rust Coding Standards
-- **IMPORTANT!!!!!** All code must be idiomatic Rust
-- **IMPORTANT!!!!!** All code must pass `cargo check` and `cargo test`.
-- **IMPORTANT!!!!!** Iterate until code is refactored correctly and tests pass!!!
-- Use explicit error handling (`Result`, `Option`)—avoid panics in production code.
-- Validate all user input and return clear, actionable error messages.
-- Follow Rust naming conventions: `snake_case` for functions/variables, `CamelCase` for types/structs/enums.
-- Document all public functions, structs, and modules with `///` doc comments.
-- Prefer small, focused functions and modular code organization.
+## 🦀 Rust Coding Standards
+### Code Quality
+- **MUST** pass `cargo check` and `cargo test`
+- **MUST** use idiomatic Rust patterns
+- **MUST** use explicit error handling (`Result`, `Option`)
+- **MUST** validate all user inputs
+- **MUST** document all public items with `///` doc comments
 
-## **IMPORTANT!!!!!** Rust *.rs Code File Organization
-- Imports
-    - Group and nest all imports by crate/module.
-    - Internal imports (std, crate) must come before external.
-    - Alphabetize within groups.
-- Type Definitions
-    - Internal vars and struct definitions
-    - Public vars and struct definitions
-- Main Function (directly after types)
-- Public Functions (alphabetical)
-- Private/Helper Functions (alphabetical)
+### Naming Conventions
+- `snake_case` for functions and variables
+- `CamelCase` for types, structs, and enums
+- `SCREAMING_SNAKE_CASE` for constants
 
-I want `main` to end up as the top level function after all imports and internal vars and struct definitions, functions always follow declarations, with main first, then public funcs in alphabetical order, then private funcs in alphabetical order.
-
-### Example
+## 📁 File Organization
+### Imports (Top of File)
 ```rust
-// Internal imports (std, crate)
+// 1. Standard library
 use std::collections::HashMap;
+
+// 2. Crate-local
 use crate::config::ApiConfig;
 
-// Public/external imports (alphabetized)
-use axum::{extract::{Query, State}, http::StatusCode, response::IntoResponse, response::Response};
-use axum::http::{header, Response as HttpResponse};
-use http_body_util::Full;
-use reqwest;
+// 3. External crates (alphabetized)
+use axum::{extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 ```
 
-## Web/Handler Rules
-- Use `axum` 0.7+ idioms for all web handlers.
-- Always validate query and body parameters; return HTTP 400 for user errors, 502 for upstream errors.
-- Consistently wrap external API responses in a project-standard MCP format (e.g., `{ meta, data }`).
+### Code Structure
+1. Type Definitions
+   - Internal types
+   - Public types
+2. `main()` function
+3. Public functions (alphabetical)
+4. Private helper functions (alphabetical)
 
-## Testing
-- **All new features, structs, and public types must have comprehensive unit test coverage. Tests must validate both typical and edge/error cases, and should directly exercise all struct fields and logic. No new feature or struct should be merged without corresponding tests.**
-- All endpoints and handlers must have unit tests covering both success and error cases.
-- Tests must be kept up to date with code changes.
-- Use mock servers for external API dependencies in tests.
+## 🌐 Web/API Standards
+### Axum 0.7+ Patterns
+- Use `axum` 0.7+ idioms
+- Validate all inputs
+- Standard response format: `{ meta, data }`
+- Error Handling:
+  - 400 for client errors
+  - 502 for upstream errors
 
-## Project-Specific
-- MCP endpoints must proxy all relevant API parameters and validate them.
-- Add clear TODO comments for any temporary workarounds (e.g., Swagger UI with Axum 0.7+).
+## 🧪 Testing Requirements
+### Unit Tests
+- **REQUIRED** for all new features and public types
+- **MUST** cover:
+  - Happy paths
+  - Error cases
+  - Edge cases
+- **MUST** use mocks for external services
+- **MUST** be updated with code changes
 
-## Collaboration
-- Prompt the User to update this file with any new conventions, patterns, or architectural decisions as the project evolves.
-- Provide the necessary instructions and examples for new patterns or decisions.
+## 🔄 Project Workflow
+1. Branch Naming: `GH-<issue-number>_<ProperCaseSummary>` (e.g., `GH-9_EndToEndIntegrationTest`)
+2. Code Review:
+   - All PRs require review
+   - All tests must pass
+   - Code coverage must not decrease
+3. Documentation:
+   - Update relevant docs with changes
+   - Add examples for new features
+
+## 🛠️ Project-Specific Rules
+- MCP endpoints must:
+  - Proxy relevant API parameters
+  - Validate all inputs
+  - Use consistent error formats
+- Use `// TODO:` comments for temporary workarounds
+- Document architectural decisions in ADRs
+
+## 🔄 Continuous Improvement
+- Regularly review and update these standards
+- Document new patterns and conventions
+- Remove deprecated patterns
