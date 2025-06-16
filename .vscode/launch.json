@@ -11,19 +11,29 @@
             "program": "${workspaceFolder}/target/debug/agenterra",
             "args": [
                 "scaffold",
+                "mcp",
+                "server",
                 "--project-name",
-                "petstore_mcp_server",
-                "--spec",
+                "${input:serverName}",
+                "--output-dir",
+                "${workspaceFolder}/.agenterra/${input:serverName}",
+                "--schema-path",
                 "${workspaceFolder}/tests/fixtures/openapi/petstore.openapi.v3.json",
                 "--template",
                 "rust_axum",
-                "--template-dir",
-                "${workspaceFolder}/templates/rust_axum",
-                "--output",
-                "${workspaceFolder}/.agenterra/petstore_mcp_server"
+                "--base-url",
+                "https://petstore3.swagger.io"
             ],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "rust: cargo build"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "serverName",
+            "description": "Server project name",
+            "default": "test_server",
+            "type": "promptString"
         }
     ]
 }

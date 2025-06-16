@@ -1,0 +1,48 @@
+[package]
+name = "agenterra-client"
+version = "0.1.0"
+edition = "2024"
+description = "Ergonomic MCP client library for Agenterra"
+license = "MIT"
+
+[dependencies]
+# MCP Protocol SDK (official)
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = [
+    "client",
+    "transport-child-process",
+] }
+
+# Core dependencies (mirroring agenterra-core)
+anyhow = "1.0"
+async-trait = "0.1"
+base64 = "0.22"
+futures = "0.3"
+log = "0.4"
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+zeroize = { version = "1.7", features = ["derive"] }
+tokio = { version = "1.0", features = [
+    "fs",
+    "io-util",
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "sync",
+    "time",
+] }
+url = { version = "2.4", features = ["serde"] }
+
+# SQLite dependencies for resource caching
+rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+# Connection pooling
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+[dev-dependencies]
+tempfile = "3.3"
+tokio-test = "0.4"
+wiremock = "0.6"

@@ -1,0 +1,37 @@
+name: "rust_reqwest"
+description: "Rust MCP client using reqwest HTTP client and rmcp protocol"
+version: "0.1.0"
+language: "rust"
+
+files:
+  - source: "Cargo.toml.tera"
+    destination: "Cargo.toml"
+  
+  - source: "src/main.rs.tera"
+    destination: "src/main.rs"
+    
+  - source: "src/client.rs.tera"
+    destination: "src/client.rs"
+    
+  - source: "src/repl.rs.tera"
+    destination: "src/repl.rs"
+    
+  - source: "src/cache.rs.tera"
+    destination: "src/cache.rs"
+    
+  - source: "src/error.rs.tera"
+    destination: "src/error.rs"
+    
+  - source: "src/resource.rs.tera"
+    destination: "src/resource.rs"
+    
+  - source: "README.md.tera"
+    destination: "README.md"
+    
+  - source: "LICENSE"
+    destination: "LICENSE"
+
+hooks:
+  post_generate:
+    - "cargo fmt"
+    - "cargo check"

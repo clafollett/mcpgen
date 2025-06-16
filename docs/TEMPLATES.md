@@ -14,58 +14,100 @@ This document describes the template system used by Agenterra for code generatio
 
 ## Template Structure
 
-A template directory should have the following structure:
+Templates are organized hierarchically by protocol and role:
 
 ```
-template_directory/
-├── manifest.yaml    # Required: Template manifest
-├── templates/       # Directory containing template files
-│   ├── *.tera       # Template files with .tera extension
-│   └── subdir/      # Subdirectories are supported
-└── hooks/           # Optional: Directory for post-generation hooks
-    └── post-generate.sh  # Optional: Script to run after generation
+templates/
+├── mcp/                    # Model Context Protocol templates
+│   ├── server/             # MCP server templates
+│   │   └── rust_axum/      # Rust Axum server template
+│   │       ├── manifest.yaml
+│   │       ├── Cargo.toml.tera
+│   │       ├── src/
+│   │       │   ├── main.rs.tera
+│   │       │   ├── server.rs.tera
+│   │       │   └── handlers/
+│   │       │       └── mod.rs.tera
+│   │       └── README.md.tera
+│   └── client/             # MCP client templates
+│       └── rust_reqwest/   # Rust reqwest client template
+│           ├── manifest.yaml
+│           ├── Cargo.toml.tera
+│           ├── src/
+│           │   ├── main.rs.tera
+│           │   ├── client.rs.tera
+│           │   └── repl.rs.tera
+│           └── README.md.tera
+└── future-protocols/       # Space for future protocol templates
+    ├── a2a/               # Agent-to-Agent protocol (planned)
+    └── custom/            # Custom protocol templates
 ```
+
+Each template directory contains:
+- `manifest.yaml` - Required template manifest
+- `*.tera` - Template files using Tera templating engine
+- Subdirectories for organized template structure
+
+## Template Types
+
+### Server Templates
+Server templates generate MCP servers from OpenAPI specifications. They require:
+- OpenAPI schema as input
+- Base URL configuration
+- Server-specific options (port, logging)
+
+**Available Server Templates:**
+- `rust_axum` - Rust MCP server using Axum web framework with rmcp protocol support
+
+### Client Templates
+Client templates generate MCP clients that can connect to MCP servers. They:
+- Don't require OpenAPI schemas (discover tools at runtime)
+- Focus on connection management and tool invocation
+- Often include REPL or CLI interfaces
+
+**Available Client Templates:**
+- `rust_reqwest` - Rust MCP client with REPL interface using rmcp protocol
 
 ## Manifest Format
 
 The `manifest.yaml` file defines the template's metadata and configuration:
 
 ```yaml
-name: my-template        # Required: Template name
-version: 1.0.0           # Required: Template version
+name: "rust_reqwest"     # Required: Template name
+version: "0.1.0"         # Required: Template version  
 description: >           # Optional: Template description
-  This template generates a Rust API client
-  from an OpenAPI specification.
+  Rust MCP client using reqwest HTTP client and rmcp protocol
+language: "rust"         # Optional: Programming language
+author: "Agenterra Team" # Optional: Author information
 
-author: Your Name <email@example.com>  # Optional: Author information
-
-# Template options (all optional)
+# Template options (client templates typically have fewer options)
 options:
-  # Operation filtering
-  all_operations: true    # Include all operations (default: true)
-  include_operations:     # Include only these operations (if specified, overrides all_operations)
-    - getPets
-    - createPet
-  exclude_operations:     # Exclude these operations
-    - deprecatedOperation
-
-  # Server configuration
-  server:
-    port: 8080            # Default server port
-    log_file: app.log     # Default log file path
+  # Client configuration
+  client:
+    timeout: 10           # Default connection timeout
+    repl_enabled: true    # Include REPL interface
+  
+  # For server templates, you might have:
+  # server:
+  #   port: 8080          # Default server port
+  #   log_file: app.log   # Default log file path
+  #   all_operations: true # Include all operations
 
 # Template files configuration
 files:
-  - source: templates/client.tera
-    target: src/client.rs
-    context:              # Optional: Additional context for this file
-      custom_var: value
+  - source: "Cargo.toml.tera"
+    destination: "Cargo.toml"
     
-  - source: templates/models.tera
-    target: src/models/
-    template_per_operation: true  # Generate one file per operation
-    context:
-      is_model: true
+  - source: "src/main.rs.tera"
+    destination: "src/main.rs"
+    
+  - source: "src/client.rs.tera"
+    destination: "src/client.rs"
+    context:              # Optional: Additional context for this file
+      is_client: true
+    
+  - source: "README.md.tera"
+    destination: "README.md"
 
 # Hooks (optional)
 hooks:
@@ -136,49 +178,182 @@ struct ParameterInfo {
 
 ## Example Templates
 
-### Basic Template Example (`client.tera`)
+### MCP Client Template Example (`client.rs.tera`)
 
 ```rust
 // Generated by Agenterra - {{ current_time }}
-// API Version: {{ api_version }}
+// MCP Client for {{ project_name | default(value="MCP Server") }}
 
+use anyhow::{Result, Context};
+use rmcp::{Client, ToolCall, ToolResult};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Duration;
 
-use serde::{{Serialize, Deserialize}};
-
-{% for endpoint in endpoints %}
-/// {{ endpoint.summary }}
-/// 
-/// {{ endpoint.description }}
-pub async fn {{ endpoint.fn_name }}(
-    client: &Client,
-    params: {{ endpoint.parameters_type }}
-) -> Result<{{ endpoint.response_type }}, Error> {
-    let url = format!("{}/api/{}", client.base_url, "{{ endpoint.endpoint }}");
-    let response = client.get(&url).query(¶ms).send().await?;
-    response.json().await
+pub struct McpClient {
+    client: Option<Client>,
+    server_url: String,
+    timeout: Duration,
+    tools: HashMap<String, Value>,
 }
 
-{% endfor %}
+impl McpClient {
+    pub async fn new(server_url: &str, timeout_secs: u64) -> Result<Self> {
+        Ok(Self {
+            client: None,
+            server_url: server_url.to_string(),
+            timeout: Duration::from_secs(timeout_secs),
+            tools: HashMap::new(),
+        })
+    }
+
+    pub async fn connect(&mut self) -> Result<()> {
+        let client = Client::stdio()
+            .context("Failed to create stdio MCP client")?;
+        self.client = Some(client);
+        self.discover_tools().await?;
+        Ok(())
+    }
+
+    async fn discover_tools(&mut self) -> Result<()> {
+        // Tool discovery implementation
+        Ok(())
+    }
+}
 ```
 
-### Model Template Example (`models.tera`)
+### MCP Server Template Example (`handlers/mod.rs.tera`)
 
 ```rust
 // Generated by Agenterra - {{ current_time }}
+// MCP Handlers for {{ project_name | default(value="MCP Server") }}
 
-use serde::{{Serialize, Deserialize}};
+use rmcp::McpService;
+use serde_json::Value;
 
-{% for endpoint in endpoints %}
-#[derive(Debug, Serialize, Deserialize)]
-pub struct {{ endpoint.response_type }} {
-    {% for prop in endpoint.properties %}
-    /// {{ prop.description | default(value="") }}
-    #[serde(rename = "{{ prop.name }}")]
-    pub {{ prop.name | snake_case }}: {{ prop.rust_type }}{% if prop.example %} // Example: {{ prop.example | json_encode | safe }}{% endif %},
-    {% endfor %}
+pub struct McpServer {
+    // Server state
 }
 
-{% endfor %}
+#[rmcp::async_trait]
+impl McpService for McpServer {
+    async fn list_tools(&self) -> rmcp::Result<Vec<rmcp::Tool>> {
+        let tools = vec![
+            {% for endpoint in endpoints %}
+            rmcp::Tool {
+                name: "{{ endpoint.fn_name }}".to_string(),
+                description: Some("{{ endpoint.summary }}".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        {% for param in endpoint.parameters %}
+                        "{{ param.name }}": {
+                            "type": "{{ param.rust_type | type_rs }}",
+                            "description": "{{ param.description | default(value="") }}"
+                        }{% if not loop.last %},{% endif %}
+                        {% endfor %}
+                    }
+                }),
+            },
+            {% endfor %}
+        ];
+        Ok(tools)
+    }
+
+    async fn call_tool(&self, call: rmcp::ToolCall) -> rmcp::Result<Vec<rmcp::ToolResult>> {
+        match call.name.as_str() {
+            {% for endpoint in endpoints %}
+            "{{ endpoint.fn_name }}" => {
+                // Implementation for {{ endpoint.fn_name }}
+                Ok(vec![rmcp::ToolResult {
+                    content: vec![rmcp::TextContent {
+                        text: "Result from {{ endpoint.fn_name }}".to_string(),
+                    }.into()],
+                    is_error: Some(false),
+                }])
+            }
+            {% endfor %}
+            _ => Err(rmcp::McpError::MethodNotFound(call.name)),
+        }
+    }
+}
+```
+
+### REPL Template Example (`repl.rs.tera`)
+
+```rust
+// Generated by Agenterra - {{ current_time }}
+// REPL interface for {{ project_name | default(value="MCP Client") }}
+
+use anyhow::Result;
+use rustyline::{Editor, Result as RustylineResult};
+use crate::client::McpClient;
+
+pub struct McpRepl {
+    client: McpClient,
+    editor: Editor<()>,
+}
+
+impl McpRepl {
+    pub fn new(client: McpClient) -> Self {
+        let editor = Editor::new();
+        Self { client, editor }
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        println!("🚀 {{ project_name | default(value="MCP Client") }} REPL");
+        println!("Type 'help' for available commands, 'quit' to exit");
+        
+        loop {
+            match self.editor.readline("> ") {
+                Ok(line) => {
+                    self.editor.add_history_entry(&line);
+                    
+                    match line.trim() {
+                        "quit" | "exit" => break,
+                        "help" => self.show_help(),
+                        "tools" => self.list_tools().await?,
+                        cmd if cmd.starts_with("call ") => {
+                            let tool_name = &cmd[5..];
+                            self.call_tool(tool_name).await?;
+                        }
+                        _ => println!("Unknown command: {}", line.trim()),
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn show_help(&self) {
+        println!("Available commands:");
+        println!("  tools           - List available tools");
+        println!("  call <tool>     - Call a specific tool");
+        println!("  help            - Show this help");
+        println!("  quit/exit       - Exit the REPL");
+    }
+
+    async fn list_tools(&mut self) -> Result<()> {
+        let tools = self.client.get_tools();
+        if tools.is_empty() {
+            println!("No tools available");
+        } else {
+            println!("Available tools:");
+            for (name, tool) in tools {
+                println!("  {} - {}", name, tool.description.as_deref().unwrap_or("No description"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn call_tool(&mut self, tool_name: &str) -> Result<()> {
+        println!("Calling tool: {}", tool_name);
+        // Tool invocation implementation
+        Ok(())
+    }
+}
 ```
 
 ## Template Context
@@ -191,8 +366,14 @@ Templates have access to a rich context that includes:
    - `current_time`: Timestamp of generation
    - `template_opts`: Options from the manifest
 
-2. **Endpoint-Specific Context**: When using `template_per_operation`, each template gets:
-   - `endpoint`: The current endpoint context
+2. **Server-Specific Context**: Server templates get:
+   - `endpoints`: Array of API endpoints from OpenAPI spec  
+   - `spec`: Complete OpenAPI specification
+   - All global context variables
+
+3. **Client-Specific Context**: Client templates get:
+   - No endpoint or spec data (clients discover at runtime)
+   - Focus on connection and tool invocation patterns
    - All global context variables
 
 ## Conditional Logic
@@ -239,17 +420,76 @@ Example:
 {{ "string" | type_rs }}  // String
 ```
 
+## Creating Custom Templates
+
+### Custom Server Template
+
+To create a custom server template:
+
+1. Create directory structure:
+   ```
+   templates/mcp/server/my_custom_server/
+   ├── manifest.yaml
+   ├── Cargo.toml.tera
+   └── src/
+       ├── main.rs.tera
+       └── lib.rs.tera
+   ```
+
+2. Use the template:
+   ```bash
+   agenterra scaffold mcp server --template my_custom_server --schema-path api.yaml
+   ```
+
+### Custom Client Template
+
+To create a custom client template:
+
+1. Create directory structure:
+   ```
+   templates/mcp/client/my_custom_client/
+   ├── manifest.yaml
+   ├── package.json.tera  # For Node.js client
+   └── src/
+       ├── index.ts.tera
+       └── client.ts.tera
+   ```
+
+2. Use the template:
+   ```bash
+   agenterra scaffold mcp client --template my_custom_client --project-name my-client
+   ```
+
 ## Best Practices
 
-1. **Keep templates simple**: Focus on structure, not complex logic
-2. **Use includes**: Break down large templates into smaller, reusable components
-3. **Document templates**: Add comments explaining non-obvious parts
-4. **Test thoroughly**: Generate code with various OpenAPI specs to ensure robustness
-5. **Handle optional fields**: Always check if fields exist before accessing them
+1. **Organize by protocol and role**: Follow the `templates/{protocol}/{role}/{template}` structure
+2. **Keep templates focused**: Server templates handle OpenAPI, client templates handle MCP communication
+3. **Use includes**: Break down large templates into smaller, reusable components
+4. **Document templates**: Add comments explaining non-obvious parts
+5. **Test thoroughly**: Generate code and verify it compiles and works
+6. **Handle optional fields**: Always check if fields exist before accessing them
+7. **Consider the target use case**: Servers need robustness, clients need usability
+
+## Template Context Differences
+
+### Server Templates
+Server templates receive:
+- `endpoints` - Array of API endpoints from OpenAPI spec
+- `spec` - Complete OpenAPI specification
+- `api_version` - API version from spec
+- `project_name` - Generated project name
+
+### Client Templates  
+Client templates receive:
+- `project_name` - Generated project name
+- `template_opts` - Template options from manifest
+- `current_time` - Generation timestamp
+- No `endpoints` or `spec` (clients discover tools at runtime)
 
 ## Troubleshooting
 
-- **Missing variables**: Ensure all required variables are passed in the template context
+- **Missing variables**: Check if you're using server-specific variables in client templates
 - **Template errors**: Check Tera's error messages for syntax issues
-- **Incorrect output**: Verify your OpenAPI spec and template logic
-- **Performance issues**: For large specs, consider splitting templates or using `template_per_operation`
+- **Incorrect output**: Verify your template logic and variable usage
+- **Template not found**: Ensure template is in correct `templates/mcp/{role}/` directory
+- **Compilation errors**: Verify generated code syntax and imports

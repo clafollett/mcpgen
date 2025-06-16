@@ -1,0 +1,10 @@
+# Cargo-audit configuration for Agenterra
+# This file tells `cargo audit` to ignore advisories that are not security-relevant
+# to our project. "paste" is currently pulled in transitively by the `rmcp` SDK
+# and is marked "unmaintained" (RUSTSEC-2024-0436). We track upstream and will
+# drop this ignore once `rmcp` moves off `paste`.
+
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0436" # paste - unmaintained
+]

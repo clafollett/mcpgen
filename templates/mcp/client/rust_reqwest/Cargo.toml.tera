@@ -1,0 +1,54 @@
+[package]
+name = "{{ project_name | default(value="mcp_client") }}"
+version = "0.1.0"
+edition = "2021"
+description = "MCP client for {{ project_name | default(value="agenterra") }}"
+license = "MIT"
+
+[[bin]]
+name = "{{ project_name | default(value="mcp_client") }}"
+path = "src/main.rs"
+
+[dependencies]
+# MCP Protocol SDK (official)
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = [
+    "client",
+    "transport-child-process"
+] }
+
+# HTTP Client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Async Runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# CLI and REPL
+clap = { version = "4.4", features = ["derive"] }
+rustyline = "13.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error Handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+url = "2.4"
+futures = "0.3"
+
+# SQLite for resource caching
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+# Connection pooling
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+[dev-dependencies]
+tempfile = "3.0"

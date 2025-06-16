@@ -1,0 +1,280 @@
+//! Interactive REPL interface for MCP client
+
+use anyhow::{Result, Context};
+use rustyline::error::ReadlineError;
+use rustyline::{DefaultEditor, Result as RustylineResult};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use tracing::{debug, error, info, warn};
+
+use crate::client::McpClient;
+
+/// REPL interface for MCP client
+pub struct McpRepl {
+    client: McpClient,
+    editor: DefaultEditor,
+}
+
+impl McpRepl {
+    /// Create a new REPL instance
+    pub fn new(client: McpClient) -> Self {
+        let editor = DefaultEditor::new().expect("Failed to create readline editor");
+        
+        Self { client, editor }
+    }
+
+    /// Run the interactive REPL
+    pub async fn run(&mut self) -> Result<()> {
+        println!("{{ project_name | default(value="MCP Client") }} - Interactive REPL");
+        println!("Type 'help' for available commands, 'quit' to exit");
+        println!();
+
+        self.show_capabilities().await;
+
+        loop {
+            let readline = self.editor.readline("mcp> ");
+            match readline {
+                Ok(line) => {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    self.editor.add_history_entry(line).ok();
+
+                    match self.handle_command(line).await {
+                        Ok(should_continue) => {
+                            if !should_continue {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("REPL command failed: {}", e);
+                        }
+                    }
+                }
+                Err(ReadlineError::Interrupted) => {
+                    println!("Use 'quit' to exit");
+                }
+                Err(ReadlineError::Eof) => {
+                    break;
+                }
+                Err(err) => {
+                    error!("Readline error: {:?}", err);
+                    break;
+                }
+            }
+        }
+
+        println!("Goodbye!");
+        self.client.disconnect().await?;
+        Ok(())
+    }
+
+    /// Handle a command from the REPL
+    async fn handle_command(&mut self, command: &str) -> Result<bool> {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        if parts.is_empty() {
+            return Ok(true);
+        }
+
+        match parts[0] {
+            "help" | "h" => {
+                self.show_help();
+            }
+            "tools" | "t" => {
+                self.show_tools();
+            }
+            "resources" | "r" => {
+                self.show_resources();
+            }
+            "prompts" | "p" => {
+                self.show_prompts();
+            }
+            "call" | "c" => {
+                if parts.len() < 2 {
+                    println!("Usage: call <tool_name> [arguments_json]");
+                } else {
+                    let tool_name = parts[1];
+                    let args = if parts.len() > 2 {
+                        let args_str = parts[2..].join(" ");
+                        serde_json::from_str(&args_str).unwrap_or_else(|_| json!({}))
+                    } else {
+                        json!({})
+                    };
+                    
+                    self.call_tool(tool_name, args).await?;
+                }
+            }
+            "get" | "g" => {
+                if parts.len() < 2 {
+                    println!("Usage: get <resource_uri>");
+                } else {
+                    let uri = parts[1];
+                    self.get_resource(uri).await?;
+                }
+            }
+            "prompt" => {
+                if parts.len() < 2 {
+                    println!("Usage: prompt <prompt_name> [arguments_json]");
+                } else {
+                    let prompt_name = parts[1];
+                    let args = if parts.len() > 2 {
+                        let args_str = parts[2..].join(" ");
+                        Some(serde_json::from_str(&args_str).unwrap_or_else(|_| json!({})))
+                    } else {
+                        None
+                    };
+                    
+                    self.get_prompt(prompt_name, args).await?;
+                }
+            }
+            "status" | "s" => {
+                self.show_status();
+            }
+            "clear" => {
+                print!("\x1B[2J\x1B[1;1H");
+            }
+            "quit" | "exit" | "q" => {
+                return Ok(false);
+            }
+            _ => {
+                println!("Unknown command: {}. Type 'help' for available commands.", parts[0]);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Show available capabilities
+    async fn show_capabilities(&self) {
+        let tools = self.client.get_tools();
+        let resources = self.client.get_resources();
+        let prompts = self.client.get_prompts();
+
+        println!("Server Capabilities:");
+        println!("  Tools: {}", tools.len());
+        println!("  Resources: {}", resources.len());
+        println!("  Prompts: {}", prompts.len());
+        println!();
+    }
+
+    /// Show help message
+    fn show_help(&self) {
+        println!("Available commands:");
+        println!("  help, h          - Show this help message");
+        println!("  tools, t         - List available tools");
+        println!("  resources, r     - List available resources");
+        println!("  prompts, p       - List available prompts");
+        println!("  call, c <tool> [args] - Call a tool with optional JSON arguments");
+        println!("  get, g <uri>     - Get a resource by URI");
+        println!("  prompt <name> [args] - Get a prompt with optional JSON arguments");
+        println!("  status, s        - Show connection status");
+        println!("  clear            - Clear screen");
+        println!("  quit, exit, q    - Exit the REPL");
+        println!();
+    }
+
+    /// Show available tools
+    fn show_tools(&self) {
+        let tools = self.client.get_tools();
+        
+        if tools.is_empty() {
+            println!("No tools available");
+            return;
+        }
+
+        println!("Available tools:");
+        for (name, tool) in tools {
+            println!("  {}: {}", name, tool.description.as_deref().unwrap_or("No description"));
+        }
+        println!();
+    }
+
+    /// Show available resources
+    fn show_resources(&self) {
+        let resources = self.client.get_resources();
+        
+        if resources.is_empty() {
+            println!("No resources available");
+            return;
+        }
+
+        println!("Available resources:");
+        for resource in resources {
+            println!("  {}: {}", resource.uri, resource.description.as_deref().unwrap_or("No description"));
+        }
+        println!();
+    }
+
+    /// Show available prompts
+    fn show_prompts(&self) {
+        let prompts = self.client.get_prompts();
+        
+        if prompts.is_empty() {
+            println!("No prompts available");
+            return;
+        }
+
+        println!("Available prompts:");
+        for prompt in prompts {
+            println!("  {}: {}", prompt.name, prompt.description.as_deref().unwrap_or("No description"));
+        }
+        println!();
+    }
+
+    /// Call a tool
+    async fn call_tool(&mut self, tool_name: &str, args: Value) -> Result<()> {
+        match self.client.call_tool(tool_name, args).await {
+            Ok(result) => {
+                println!("Tool result:");
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!();
+            }
+            Err(e) => {
+                error!("Failed to call tool '{}': {}", tool_name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Get a resource
+    async fn get_resource(&mut self, uri: &str) -> Result<()> {
+        match self.client.get_resource(uri).await {
+            Ok(content) => {
+                println!("Resource content:");
+                println!("{}", serde_json::to_string_pretty(&content)?);
+                println!();
+            }
+            Err(e) => {
+                error!("Failed to get resource '{}': {}", uri, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Get a prompt
+    async fn get_prompt(&mut self, name: &str, args: Option<Value>) -> Result<()> {
+        match self.client.get_prompt(name, args).await {
+            Ok(content) => {
+                println!("Prompt content:");
+                println!("{}", serde_json::to_string_pretty(&content)?);
+                println!();
+            }
+            Err(e) => {
+                error!("Failed to get prompt '{}': {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Show connection status
+    fn show_status(&self) {
+        println!("Connection Status:");
+        println!("  Connected: {}", self.client.is_connected());
+        println!("  Tools: {}", self.client.get_tools().len());
+        println!("  Resources: {}", self.client.get_resources().len());
+        println!("  Prompts: {}", self.client.get_prompts().len());
+        println!();
+    }
+}

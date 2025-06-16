@@ -1,0 +1,67 @@
+//! {{ project_name | default(value="MCP Client") }}
+//!
+//! Interactive MCP client with REPL interface for tool discovery and invocation.
+
+mod client;
+mod repl;
+mod cache;
+mod error;
+mod resource;
+
+use anyhow::Result;
+use clap::Parser;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::client::McpClient;
+use crate::repl::McpRepl;
+
+#[derive(Parser)]
+#[command(name = "{{ project_name | default(value="mcp-client") }}")]
+#[command(about = "Interactive MCP client for tool discovery and invocation")]
+struct Cli {
+    /// MCP server command to run (path to server binary)
+    #[arg(short, long)]
+    server: String,
+    
+    /// Enable debug logging
+    #[arg(short, long)]
+    debug: bool,
+    
+    /// Connect timeout in seconds
+    #[arg(short, long, default_value = "10")]
+    timeout: u64,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    
+    // Initialize logging
+    let log_level = if cli.debug { "debug" } else { "info" };
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{{ project_name | default(value="mcp_client") }}={}", log_level).into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    tracing::info!("Starting {{ project_name | default(value="MCP Client") }}");
+    tracing::info!("Connecting to MCP server: {}", cli.server);
+
+    // Create and connect MCP client
+    let mut client = McpClient::new("stdio", cli.timeout).await?;
+    
+    // Start the server process and connect via stdio
+    tracing::info!("Starting MCP server: {}", cli.server);
+    let command = tokio::process::Command::new(&cli.server);
+    client.connect_stdio(command).await?;
+    
+    tracing::info!("Connected to MCP server successfully");
+    
+    // Start REPL interface
+    let mut repl = McpRepl::new(client);
+    repl.run().await?;
+
+    Ok(())
+}

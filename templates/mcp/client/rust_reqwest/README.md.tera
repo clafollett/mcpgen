@@ -1,0 +1,125 @@
+# {{ project_name | default(value="MCP Client") }}
+
+Interactive MCP (Model Context Protocol) client with REPL interface for tool discovery and invocation.
+
+## Features
+
+- **Interactive REPL**: Command-line interface for exploring MCP servers
+- **Tool Discovery**: Automatically discovers available tools from connected servers
+- **Resource Access**: Browse and access server resources
+- **Prompt Interaction**: Work with server-provided prompts
+- **Real-time Communication**: Direct MCP protocol communication using rmcp
+
+## Usage
+
+### Basic Usage
+
+```bash
+# Connect to MCP server via stdio
+cargo run
+
+# Connect with debug logging
+cargo run -- --debug
+
+# Connect with custom timeout
+cargo run -- --timeout 30
+```
+
+### REPL Commands
+
+Once connected, use these commands in the interactive REPL:
+
+- `help` - Show available commands
+- `tools` - List available tools  
+- `resources` - List available resources
+- `prompts` - List available prompts
+- `call <tool> [args]` - Call a tool with optional JSON arguments
+- `get <uri>` - Get a resource by URI
+- `prompt <name> [args]` - Get a prompt with optional JSON arguments
+- `status` - Show connection status
+- `quit` - Exit the client
+
+### Examples
+
+```
+mcp> tools
+Available tools:
+  calculate: Perform mathematical calculations
+  weather: Get weather information
+
+mcp> call calculate {"operation": "add", "a": 5, "b": 3}
+Tool result:
+{
+  "result": 8
+}
+
+mcp> get file:///path/to/resource
+Resource content:
+{
+  "content": "File contents here..."
+}
+```
+
+## Configuration
+
+The client supports the following command-line options:
+
+- `--server <URL>` - MCP server URL (default: "stdio")
+- `--debug` - Enable debug logging
+- `--timeout <seconds>` - Connection timeout in seconds (default: 10)
+
+### Cache Configuration
+
+The client includes an SQLite-powered resource cache with connection pooling for optimal performance:
+
+- **Default pool settings**: 1 minimum, 10 maximum connections
+- **Connection lifetime**: 5 minutes (auto-recycled to avoid stale WAL readers)
+- **Cache location**: `data/{{ project_name | default(value="mcp_client") }}_cache.db` (next to executable)
+- **Pool statistics**: Available via `get_pool_stats()` method
+
+The cache provides:
+- Resource caching with TTL support
+- Analytics and performance metrics
+- Concurrent access via connection pooling
+- Automatic cleanup of expired resources
+
+## Dependencies
+
+- **rmcp**: MCP protocol implementation
+- **reqwest**: HTTP client for network communication
+- **rustyline**: Interactive command-line editing
+- **tokio**: Async runtime
+- **serde**: Serialization support
+- **rusqlite**: SQLite database engine for resource caching
+- **r2d2**: Connection pooling for database operations
+- **chrono**: Date and time handling for cache analytics
+
+## Development
+
+### Building
+
+```bash
+cargo build
+```
+
+### Running Tests
+
+```bash
+cargo test
+```
+
+### Formatting
+
+```bash
+cargo fmt
+```
+
+### Linting
+
+```bash
+cargo clippy
+```
+
+## License
+
+This project is licensed under the MIT License.

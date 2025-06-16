@@ -1,0 +1,284 @@
+//! MCP client implementation using rmcp protocol
+
+use anyhow::{Result, Context};
+use rmcp::{
+    RoleClient,
+    model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam, CallToolResult},
+    service::{RunningService, ServiceExt},
+    transport::TokioChildProcess,
+};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Duration;
+use tokio::time;
+use tracing::{debug, error, info, warn};
+
+use crate::cache::{ResourceCache, CacheConfig};
+use crate::resource::{ResourceContent, ResourceInfo};
+
+/// MCP client for tool discovery and invocation
+pub struct McpClient {
+    service: Option<RunningService<RoleClient, ()>>,
+    server_url: String,
+    timeout: Duration,
+    tools: HashMap<String, rmcp::model::Tool>,
+    resources: Vec<rmcp::model::Resource>,
+    prompts: Vec<rmcp::model::Prompt>,
+    cache: Option<ResourceCache>,
+}
+
+impl McpClient {
+    /// Get the path for the cache database file
+    fn get_cache_db_path() -> Result<String> {
+        // Try to get the executable directory, fallback to current directory
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        
+        // Create a data directory next to the executable
+        let data_dir = exe_dir.join("data");
+        std::fs::create_dir_all(&data_dir).context("Failed to create data directory")?;
+        
+        // Create the database path
+        let db_path = data_dir.join("{{ project_name | default(value="mcp_client") }}_cache.db");
+        Ok(db_path.to_string_lossy().to_string())
+    }
+
+    /// Create a new MCP client
+    pub async fn new(server_url: &str, timeout_secs: u64) -> Result<Self> {
+        // Initialize SQLite cache for resources
+        let cache_db_path = Self::get_cache_db_path()?;
+        let cache_config = CacheConfig {
+            database_path: cache_db_path,
+            ..Default::default()
+        };
+        
+        let cache = ResourceCache::new(cache_config).await.ok();
+        if cache.is_some() {
+            tracing::info!("SQLite resource cache initialized");
+        } else {
+            tracing::warn!("Failed to initialize resource cache, running without cache");
+        }
+        
+        Ok(Self {
+            service: None,
+            server_url: server_url.to_string(),
+            timeout: Duration::from_secs(timeout_secs),
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+            cache,
+        })
+    }
+
+    /// Connect to the MCP server via stdio (subprocess)
+    pub async fn connect_stdio(&mut self, command: tokio::process::Command) -> Result<()> {
+        tracing::info!("Connecting to MCP server via stdio");
+        
+        let transport = TokioChildProcess::new(command).context("Failed to create child process transport")?;
+        let service = ().serve(transport).await.context("Failed to connect to MCP server")?;
+
+        self.service = Some(service);
+        
+        // Discover available tools, resources, and prompts
+        self.discover_capabilities().await?;
+        
+        Ok(())
+    }
+
+    /// Connect to the MCP server (legacy method for backwards compatibility)
+    pub async fn connect(&mut self) -> Result<()> {
+        if self.server_url == "stdio" {
+            // For backwards compatibility, create a simple echo command
+            let mut command = tokio::process::Command::new("echo");
+            command.arg("MCP server placeholder");
+            return Err(anyhow::anyhow!("Please use connect_stdio() with a proper command instead"));
+        } else {
+            return Err(anyhow::anyhow!("Only stdio connections are currently supported. Use connect_stdio() method."));
+        }
+    }
+
+    /// Discover tools, resources, and prompts from the server
+    async fn discover_capabilities(&mut self) -> Result<()> {
+        let service = self.service.as_ref().context("Service not connected")?;
+        
+        tracing::info!("Discovering server capabilities...");
+        
+        // Discover tools
+        match time::timeout(self.timeout, service.list_tools(Default::default())).await? {
+            Ok(tools_response) => {
+                self.tools.clear();
+                for tool in tools_response.tools {
+                    tracing::debug!("Discovered tool: {}", tool.name);
+                    self.tools.insert(tool.name.to_string(), tool);
+                }
+                tracing::info!("Discovered {} tools", self.tools.len());
+            }
+            Err(e) => tracing::warn!("Failed to discover tools: {}", e),
+        }
+
+        // Discover resources
+        match time::timeout(self.timeout, service.list_all_resources()).await? {
+            Ok(resources) => {
+                self.resources = resources;
+                tracing::info!("Discovered {} resources", self.resources.len());
+            }
+            Err(e) => tracing::warn!("Failed to discover resources: {}", e),
+        }
+
+        // Discover prompts
+        match time::timeout(self.timeout, service.list_prompts(Default::default())).await? {
+            Ok(prompts_response) => {
+                self.prompts = prompts_response.prompts;
+                tracing::info!("Discovered {} prompts", self.prompts.len());
+            }
+            Err(e) => tracing::warn!("Failed to discover prompts: {}", e),
+        }
+
+        Ok(())
+    }
+
+    /// Get list of available tools
+    pub fn get_tools(&self) -> &HashMap<String, rmcp::model::Tool> {
+        &self.tools
+    }
+
+    /// Get list of available resources
+    pub fn get_resources(&self) -> &[rmcp::model::Resource] {
+        &self.resources
+    }
+
+    /// Get list of available prompts
+    pub fn get_prompts(&self) -> &[rmcp::model::Prompt] {
+        &self.prompts
+    }
+
+    /// Call a tool with given arguments
+    pub async fn call_tool(&mut self, tool_name: &str, arguments: Value) -> Result<CallToolResult> {
+        let service = self.service.as_ref().context("Service not connected")?;
+        
+        tracing::info!("Calling tool: {} with arguments: {}", tool_name, arguments);
+        
+        let arguments_object = arguments.as_object().cloned();
+        let request = CallToolRequestParam {
+            name: tool_name.to_string().into(),
+            arguments: arguments_object,
+        };
+
+        let result = time::timeout(self.timeout, service.call_tool(request))
+            .await?
+            .context("Tool call failed")?;
+
+        tracing::debug!("Tool call result: {:?}", result);
+        Ok(result)
+    }
+
+    /// Get a resource by URI
+    pub async fn get_resource(&mut self, uri: &str) -> Result<Value> {
+        tracing::info!("Getting resource: {}", uri);
+        
+        // Check cache first
+        if let Some(ref mut cache) = self.cache {
+            if let Ok(Some(cached_resource)) = cache.get_resource(uri).await {
+                tracing::debug!("Cache hit for resource: {}", uri);
+                return Ok(serde_json::to_value(&cached_resource)
+                    .context("Failed to serialize cached resource")?);
+            }
+            tracing::debug!("Cache miss for resource: {}", uri);
+        }
+        
+        let service = self.service.as_ref().context("Service not connected")?;
+        
+        let request = ReadResourceRequestParam {
+            uri: uri.to_string(),
+        };
+        
+        let result = time::timeout(self.timeout, service.read_resource(request))
+            .await?
+            .context("Resource read failed")?;
+
+        // Store in cache if available
+        if let Some(ref mut cache) = self.cache {
+            if let Some(contents) = result.contents.first() {
+                let resource_content = match contents {
+                    rmcp::model::ResourceContents::TextResourceContents { uri, mime_type, text } => {
+                        let info = ResourceInfo {
+                            uri: uri.clone(),
+                            name: None,
+                            description: None,
+                            mime_type: mime_type.clone(),
+                            metadata: HashMap::new(),
+                        };
+                        ResourceContent {
+                            info,
+                            data: text.as_bytes().to_vec(),
+                            encoding: Some("utf-8".to_string()),
+                        }
+                    }
+                    rmcp::model::ResourceContents::BlobResourceContents { uri, mime_type, blob } => {
+                        let info = ResourceInfo {
+                            uri: uri.clone(),
+                            name: None,
+                            description: None,
+                            mime_type: mime_type.clone(),
+                            metadata: HashMap::new(),
+                        };
+                        ResourceContent {
+                            info,
+                            data: blob.clone().into_bytes(),
+                            encoding: None,
+                        }
+                    }
+                };
+                
+                if let Err(e) = cache.store_resource(&resource_content).await {
+                    tracing::warn!("Failed to cache resource '{}': {}", uri, e);
+                }
+            }
+        }
+
+        // Convert the result to JSON
+        let result_json = serde_json::to_value(&result)
+            .context("Failed to serialize resource result")?;
+
+        Ok(result_json)
+    }
+
+    /// Get a prompt by name with arguments
+    pub async fn get_prompt(&mut self, name: &str, arguments: Option<Value>) -> Result<Value> {
+        let service = self.service.as_ref().context("Service not connected")?;
+        
+        tracing::info!("Getting prompt: {} with arguments: {:?}", name, arguments);
+        
+        let arguments_object = arguments.and_then(|v| v.as_object().cloned());
+        let request = rmcp::model::GetPromptRequestParam {
+            name: name.to_string().into(),
+            arguments: arguments_object,
+        };
+        
+        let result = time::timeout(self.timeout, service.get_prompt(request))
+            .await?
+            .context("Prompt get failed")?;
+
+        // Convert the result to JSON
+        let result_json = serde_json::to_value(&result)
+            .context("Failed to serialize prompt result")?;
+
+        Ok(result_json)
+    }
+
+    /// Check if client is connected
+    pub fn is_connected(&self) -> bool {
+        self.service.is_some()
+    }
+
+    /// Disconnect from server
+    pub async fn disconnect(&mut self) -> Result<()> {
+        if let Some(_service) = self.service.take() {
+            tracing::info!("Disconnecting from MCP server");
+            // rmcp service handles cleanup on drop
+        }
+        Ok(())
+    }
+}

@@ -56,7 +56,6 @@ Agenterra is building the foundational infrastructure for AI agents to discover,
 
 **Goal:** Expand Agenterra to generate MCP servers in multiple programming languages, starting with enterprise-focused languages.
 
-### Phase 3.1: C# Support
 - [ ] **C# MCP Server Templates**
   - [ ] ASP.NET Core template structure
   - [ ] Entity Framework integration
@@ -64,7 +63,6 @@ Agenterra is building the foundational infrastructure for AI agents to discover,
   - [ ] NuGet package management
   - [ ] Enterprise security patterns
 
-### Phase 3.2: Python Support
 - [ ] **Python MCP Server Templates**
   - [ ] FastAPI/Flask template options
   - [ ] Pydantic model generation
@@ -72,7 +70,6 @@ Agenterra is building the foundational infrastructure for AI agents to discover,
   - [ ] Virtual environment management
   - [ ] Package dependency handling
 
-### Phase 3.3: TypeScript Support
 - [ ] **TypeScript MCP Server Templates**
   - [ ] Express/Fastify template options
   - [ ] Strong typing throughout
@@ -80,38 +77,71 @@ Agenterra is building the foundational infrastructure for AI agents to discover,
   - [ ] Modern ES modules support
   - [ ] Zod schema validation
 
-### Phase 3.4: Additional Languages
 - [ ] **Java** (Spring Boot templates)
 - [ ] **Go** (Gin/Echo templates)
 - [ ] **PHP** (Laravel/Symfony templates)
 - [ ] **Ruby** (Rails/Sinatra templates)
 
-## Priority 4: MCP Client Generation 🏭
+## Priority 4: Multi-Language MCP Templates 🌍
 
-**Goal:** After mastering MCP client development, generate clients in multiple languages for consuming MCP servers.
+**Goal:** Expand MCP client and server generation to multiple programming languages, building on the established template architecture.
 
-- [ ] **Client Template Architecture**
-  - [ ] Generic client interface patterns
-  - [ ] Language-specific implementations
-  - [ ] OpenAPI → MCP client mapping
-  - [ ] Authentication handling
-  - [ ] Error management patterns
+- [x] **Rust Templates (Completed)**
+  - [x] Rust MCP server template (`rust_axum`)
+  - [x] Rust MCP client template (`rust_reqwest`)
+  - [x] REPL interface and tool discovery
+  - [x] Production-ready code generation
 
-- [ ] **Multi-Language Client Support**
-  - [ ] C# MCP clients (HttpClient-based)
-  - [ ] Python MCP clients (aiohttp/requests)
-  - [ ] TypeScript MCP clients (fetch/axios)
-  - [ ] Java MCP clients (OkHttp/RestTemplate)
-  - [ ] Go MCP clients (net/http)
+- [ ] **Python MCP Templates**
+  - [ ] Python MCP server template (`python_fastapi`)
+  - [ ] Python MCP client template (`python_aiohttp`)
+  - [ ] Pydantic model generation
+  - [ ] Virtual environment setup
 
-- [ ] **Client Features**
-  - [ ] Async/await patterns
-  - [ ] Connection pooling
-  - [ ] Retry mechanisms
-  - [ ] Caching strategies
-  - [ ] Monitoring integration
+- [ ] **TypeScript MCP Templates**
+  - [ ] TypeScript MCP server template (`typescript_express`)
+  - [ ] TypeScript MCP client template (`typescript_fetch`)
+  - [ ] Strong typing throughout
+  - [ ] npm package management
 
-## Priority 5: AI Agent Ecosystem 🦍
+- [ ] **Additional Languages**
+  - [ ] C# MCP templates (ASP.NET Core + HttpClient)
+  - [ ] Java MCP templates (Spring Boot + OkHttp)
+  - [ ] Go MCP templates (Gin + net/http)
+
+## Priority 5: AI-Powered API Exploration 🤖✨
+
+**Goal:** Leverage AI to provide intelligent API discovery, testing, and optimization features that go beyond traditional tools.
+
+- [ ] **Intelligent API Discovery**
+  - [ ] AI-driven endpoint detection from codebases
+  - [ ] Automatic API pattern recognition
+  - [ ] Smart parameter inference from usage
+  - [ ] Documentation gap detection
+  - [ ] RESTful convention compliance checking
+
+- [ ] **AI-Assisted Testing**
+  - [ ] Automatic test case generation
+  - [ ] Edge case discovery using AI
+  - [ ] Performance bottleneck prediction
+  - [ ] Security vulnerability suggestions
+  - [ ] Intelligent fuzzing strategies
+
+- [ ] **Natural Language API Interaction**
+  - [ ] "Talk to your API" interface
+  - [ ] Plain English to API call translation
+  - [ ] Conversational debugging assistant
+  - [ ] AI-powered error explanations
+  - [ ] Intent-based API navigation
+
+- [ ] **Smart Code Generation**
+  - [ ] Context-aware client generation
+  - [ ] Best practices enforcement
+  - [ ] Automatic optimization suggestions
+  - [ ] Framework-specific adaptations
+  - [ ] Usage pattern learning
+
+## Priority 6: AI Agent Ecosystem 🦍
 
 **Goal:** Build the infrastructure for AI agents to discover, register, and collaborate with each other.
 

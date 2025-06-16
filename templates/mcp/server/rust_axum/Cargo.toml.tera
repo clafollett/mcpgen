@@ -1,0 +1,53 @@
+[package]
+name = "{{ project_name }}"
+version = "0.1.0"
+edition = "2024"
+default-run = "{{ project_name }}"
+license = "MIT"
+
+[workspace]
+# This empty workspace table prevents inheriting the parent workspace configuration
+
+[[bin]]
+name = "{{ project_name }}"
+path = "src/main.rs"
+
+[dependencies]
+signal-hook = "*"
+anyhow = "1.0"
+axum = { version = "0.8.3", features = ["json", "macros", "ws", "multipart"] }
+clap = { version = "4", features = ["derive"] }
+dotenvy = { version = "0.15.7", features = ["cli"] }
+futures = "0.3.31"
+log = "0.4"
+regex = "1.11.1"
+reqwest = { version = "0.12.19", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", branch = "main", features = [
+    "macros",
+    "server",
+    "transport-sse-server",
+    "transport-io",
+    "auth"
+] }
+schemars = "0.8.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+signal-hook-tokio = "0.3.1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tower = { version = "0.5.2", features = ["util"] }
+tera = "1.17"
+tracing = "0.1"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+urlencoding = "2.1.3"
+utoipa = "5.3.1"
+utoipa-swagger-ui = "9.0.1"
+
+[dev-dependencies]
+wiremock = "0.6"
